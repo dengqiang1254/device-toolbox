@@ -461,6 +461,10 @@ function generate(){
     otherTot:other.length, otherOn:otherOn, otherOff:other.length-otherOn,
     norecTot:norec.length, norecOn:norecOn, norecOff:norec.length-norecOn
   };
+  var rateCards = ispStat.map(function(s){
+    var r = s.tot ? (s.on*100/s.tot).toFixed(1) : '0.0';
+    return card(r+'%', s.name+' 在线率', 'on');
+  }).join('');
   // 总览：环形图 + 指标卡
   var html = '<div class="stats-row">'+
     '<div class="donut-card">'+
@@ -476,6 +480,7 @@ function generate(){
       card(online,'在线','on')+
       card(total-online,'离线','off')+
       card(rate.toFixed(1)+'%','总在线率','on')+
+      rateCards +
       card(norec.length,'无IP通道')+
       card(SRC.rows.length,'源数据总行数')+
     '</div></div>';
