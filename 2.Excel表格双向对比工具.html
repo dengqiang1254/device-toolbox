@@ -498,6 +498,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var dataL = firstIsData(rowsL) ? rowsL : rowsL.slice(1);
     var dataR = firstIsData(rowsR) ? rowsR : rowsR.slice(1);
     var mode = $('mode').value;
+    // 选择“全部（合并所有子表）”时改为整行比较：合并后若仍按 IP 关键列匹配，
+    // 会出现“两侧 IP 都在、仅内容/所在子表不同”却显示 0 修复/0 离线的误判
+    if((state.sheetLeft === '__all__' || state.sheetRight === '__all__') && mode === 'auto'){ mode = 'row'; }
     var keyL = 0, keyR = 0;
     if(mode === 'auto'){
       keyL = findKeyCol(headerL);
