@@ -260,6 +260,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var sel = $(id.sel), rowEl = $(id.row), drop = $(id.drop), info = $(id.info);
     sel.innerHTML = '';
     var rowCount = {};
+    if(wb.SheetNames.length > 1){
+      var allOpt = document.createElement('option');
+      allOpt.value = '__all__';
+      allOpt.textContent = '全部（合并 ' + wb.SheetNames.length + ' 个子表）';
+      sel.appendChild(allOpt);
+    }
     wb.SheetNames.forEach(function(name){
       var c = nonEmptyRowCount(wb.Sheets[name]);
       rowCount[name] = c;
@@ -367,11 +373,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   /* ---------- 表格解析 ---------- */
+  // 「全部」= 合并所有子表；表头与首个子表相同的后续子表自动去重表头行
+  function readSideAOA(wb, name){
+    if(name === '__all__'){
+      var out = [];
+      wb.SheetNames.forEach(function(n){
+        var aoa = XLSX.utils.sheet_to_json(wb.Sheets[n], {header:1, defval:''});
+        if(!aoa.length) return;
+        if(!out.length){ out = aoa.slice(); return; }
+        var first = aoa[0], h0 = out[0];
+        var same = h0 && first.length===h0.length && first.every(function(c,i){ return String(c==null?'':c).trim()===String(h0[i]==null?'':h0[i]).trim(); });
+        out = out.concat(same ? aoa.slice(1) : aoa);
+      });
+      return out;
+    }
+    if(!wb.Sheets[name]) return null;
+    return XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
+  }
   function getAOA(side){
     var wb = side==='left' ? state.wbLeft : state.wbRight;
     var name = side==='left' ? state.sheetLeft : state.sheetRight;
-    if(!wb || !name || !wb.Sheets[name]) return null;
-    var aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
+    if(!wb || !name) return null;
+    var aoa = readSideAOA(wb, name);
+    if(!aoa) return null;
     var rows = aoa.filter(function(r){ return r.some(function(c){ return String(c).trim() !== ''; }); });
     if(rows.length === 0) return null;
     return rows;
@@ -531,8 +555,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     addToNameMap(dataL, keyL, nameL);
     addToNameMap(dataR, keyR, nameR);
     // 从「名称对照表」（可选第三文件）中补充 IP→名称 映射
-    if(state.wbRef && state.sheetRef && state.wbRef.Sheets[state.sheetRef]){
-      var refAOA = XLSX.utils.sheet_to_json(state.wbRef.Sheets[state.sheetRef], {header:1, defval:''});
+    if(state.wbRef && state.sheetRef){
+      var refAOA = readSideAOA(state.wbRef, state.sheetRef) || [];
       var refRows = refAOA.filter(function(r){ return r.some(function(c){ return String(c).trim() !== ''; }); });
       if(refRows.length > 0){
         var refTrimmed = trimAOA(refRows);

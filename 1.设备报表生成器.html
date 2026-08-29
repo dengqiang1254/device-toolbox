@@ -98,6 +98,12 @@ tr:hover td{background:#eef4ff}
 background:#fff;border-radius:20px;cursor:pointer;font-size:13px;transition:.15s}
 .loadmore:hover{background:var(--blue);color:#fff}
 #report{display:none}
+.sheet-pick{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px;
+  background:#f4faf6;border:1px solid #d3e8da;border-radius:8px;padding:6px 10px}
+.sheet-pick label{font-size:12.5px;font-weight:700;color:#14321f;white-space:nowrap}
+.sheet-pick select{padding:4px 8px;font-size:12.5px;max-width:220px;
+  border:1px solid #cfe5d7;border-radius:8px;background:#fff;color:#14321f}
+.sheet-pick .sp-info{font-size:11.5px;color:#5a7a66}
 </style>
 </head>
 <body>
@@ -111,6 +117,11 @@ background:#fff;border-radius:20px;cursor:pointer;font-size:13px;transition:.15s
 <div class="big">点击选择 或 拖拽 xlsx 文件到此处</div>
 <div class="tip">支持 .xlsx / .xls，表格需包含「设备IP」「设备名称」「通道状态」列</div>
 <input type="file" id="file" accept=".xlsx,.xls" style="display:none">
+</div>
+<div class="sheet-pick" id="sheetPick" style="display:none">
+  <label>📑 子表：</label>
+  <select id="sheetSel"></select>
+  <span class="sp-info">可选「全部」合并所有子表，或指定某个子表</span>
 </div>
 <div id="status"></div>
 
@@ -271,11 +282,25 @@ function handleFile(file){
   };
   fr.readAsArrayBuffer(file);
 }
-function parseWorkbook(buf, fname){
-  var wb = XLSX.read(buf, {type:'array'});
-  var ws = wb.Sheets[wb.SheetNames[0]];
-  var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:false});
-  if(!rows.length) throw new Error('表格为空');
+/* ---------- 子表选择（全部 / 指定子表） ---------- */
+var BOOK = null;
+function mergeSheets(){
+  var out = [];
+  BOOK.sheets.forEach(function(sh){
+    if(!sh.rows.length) return;
+    if(!out.length){ out = sh.rows.slice(); return; }
+    var first = sh.rows[0], h0 = out[0];
+    var same = h0 && first.length===h0.length && first.every(function(c,i){ return String(c==null?'':c).trim()===String(h0[i]==null?'':h0[i]).trim(); });
+    out = out.concat(same ? sh.rows.slice(1) : sh.rows);
+  });
+  return out;
+}
+function applySheet(){
+  if(!BOOK) return;
+  var sel = $('sheetSel');
+  var rows = (sel.value==='__all__') ? mergeSheets() : BOOK.sheets[+sel.value].rows;
+  if(!rows.length){ $('status').textContent = '该子表为空'; return; }
+  var fname = BOOK.fileName + (BOOK.sheets.length>1 && sel.value!=='__all__' ? ' · '+BOOK.sheets[+sel.value].name : '');
   var head = rows[0].map(function(v){return String(v==null?'':v).trim();});
   SRC = {head:head, rows:rows.slice(1), file:fname};
   // 必选列固定映射：仅按表头「设备IP」「设备名称」「通道状态」精确匹配
@@ -289,6 +314,32 @@ function parseWorkbook(buf, fname){
   $('status').textContent = '已载入 '+fname+'：'+SRC.rows.length+' 行 × '+head.length+' 列。请确认下方列映射与IP段配置，点击"生成报表"。';
   $('report').style.display='none';
   $('cfgPanel').style.display='block';
+}
+function parseWorkbook(buf, fname){
+  var wb = XLSX.read(buf, {type:'array'});
+  var sheets = [], best = -1, bestScore = -1;
+  for(var i=0;i<wb.SheetNames.length;i++){
+    var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[i]], {header:1, defval:'', raw:false});
+    if(!rows.length) continue;
+    var hd = rows[0].map(function(v){return String(v==null?'':v).trim();});
+    var score = hd.indexOf('设备IP')>=0 ? rows.length : 0;
+    sheets.push({name:wb.SheetNames[i], rows:rows});
+    if(score > bestScore){ best = sheets.length-1; bestScore = score; }
+  }
+  if(!sheets.length) throw new Error('表格为空');
+  BOOK = {fileName:fname, sheets:sheets, best:best>=0?best:0};
+  var pick = $('sheetPick'), sel = $('sheetSel');
+  if(sheets.length > 1){
+    var html = '<option value="__all__">全部（合并 '+sheets.length+' 个子表）</option>';
+    sheets.forEach(function(s,i){ html += '<option value="'+i+'"'+(i===BOOK.best?' selected':'')+'>'+escHtml(s.name)+'</option>'; });
+    sel.innerHTML = html;
+    pick.style.display = 'flex';
+    if(!sel._bound){ sel._bound = true; sel.addEventListener('change', applySheet); }
+  } else {
+    pick.style.display = 'none';
+    sel.innerHTML = '';
+  }
+  applySheet();
 }
 function findCol(head, names){
   for(var i=0;i<head.length;i++){ var h=head[i]; for(var j=0;j<names.length;j++){ if(h===names[j]) return i; } }

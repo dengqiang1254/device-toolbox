@@ -88,6 +88,16 @@
   }
   .useprev:hover { background: #e3ecfd; }
   .useprev:disabled { opacity: .45; cursor: not-allowed; }
+  .sheet-pick {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px;
+    background: #f4faf6; border: 1px solid #d3e8da; border-radius: 8px; padding: 6px 10px;
+  }
+  .sheet-pick label { font-size: 12.5px; font-weight: 700; color: #14321f; white-space: nowrap; }
+  .sheet-pick select {
+    padding: 4px 8px; font-size: 12.5px; max-width: 220px;
+    border: 1px solid #cfe5d7; border-radius: 8px; background: #fff; color: #14321f;
+  }
+  .sheet-pick .sp-info { font-size: 11.5px; color: #5a7a66; }
 
   .note { font-size: 12.5px; color: #5a7a66; line-height: 1.8; margin-top: 10px; }
   .carrier-filter {
@@ -259,6 +269,11 @@
         <input type="file" id="s1File" accept=".xlsx,.xls">
         📊 点击或拖入<b>设备数据 Excel</b>（需含「设备IP」「设备名称」「通道状态」列）
       </label>
+      <div class="sheet-pick" id="s1Pick" style="display:none">
+        <label>📑 子表：</label>
+        <select id="s1Sheet"></select>
+        <span class="sp-info">可选「全部」合并所有子表，或指定某个子表</span>
+      </div>
       <div class="carrier-filter" id="s1ColRow" style="display:none">
         <span class="cf-label">🧩 可选列映射：</span>
         <span class="cm"><label>通道名称列</label><select id="s1Chan"></select></span>
@@ -321,6 +336,11 @@
             点击或拖入 <b>原离线名单</b>
           </label>
           <span class="ok" id="s2LeftOk" style="display:none"></span>
+          <div class="sheet-pick" id="s2LeftPick" style="display:none">
+            <label>📑 子表：</label>
+            <select id="s2LeftSheet"></select>
+            <span class="sp-info">可选「全部」合并所有子表，或指定某个子表</span>
+          </div>
         </div>
         <div class="src">
           <h4>B · 新离线名单 <span class="tag">（这一次的离线表）</span></h4>
@@ -329,6 +349,11 @@
             点击或拖入 <b>新离线名单</b>
           </label>
           <span class="ok" id="s2RightOk" style="display:none"></span>
+          <div class="sheet-pick" id="s2RightPick" style="display:none">
+            <label>📑 子表：</label>
+            <select id="s2RightSheet"></select>
+            <span class="sp-info">可选「全部」合并所有子表，或指定某个子表</span>
+          </div>
           <br><button class="useprev" id="s2UsePrev" disabled>♻ 使用步骤 1 的离线名单</button>
         </div>
       </div>
@@ -368,6 +393,11 @@
         <input type="file" id="s3File" accept=".xlsx,.xls,.csv">
         🔧 点击或拖入<b>离线 IP 表</b>（也可直接使用步骤 2 结果）
       </label>
+      <div class="sheet-pick" id="s3Pick" style="display:none">
+        <label>📑 子表：</label>
+        <select id="s3Sheet"></select>
+        <span class="sp-info">可选「全部」合并所有子表，或指定某个子表</span>
+      </div>
       <div class="btns">
         <button class="useprev" id="s3UsePrev" disabled style="margin-top:0">♻ 使用步骤 2 的「新离线 + 新修复」</button>
       </div>
@@ -548,23 +578,31 @@ function s1BuildMap(head){
   });
 }
 function s1Handle(file){
-  readSheet(file, function(sh, err){
-    if(err || !sh){ toast('❌ 文件读取失败'); return; }
-    var head = sh.aoa[0] || [];
-    var ipC = findCol(head, function(h){ return h === '设备ip'; });
-    if(ipC<0){ toast('❌ 未找到「设备IP」列，请检查表头'); return; }
-    S1.srcAoa = sh.aoa;
-    S1.srcName = file.name.replace(/\.[^.]+$/, '');
-    S1.cols = {
-      ipC: ipC,
-      nmC: findCol(head, function(h){ return h === '设备名称'; }),
-      stC: findCol(head, function(h){ return h === '通道状态'; }),
-      chC: findCol(head, function(h){ return h.indexOf('通道名称')>=0; })
-    };
-    s1BuildMap(head);
-    document.getElementById('s1ColRow').style.display = 'flex';
-    s1Analyze();
+  s2ReadBook(file, function(book, err){
+    if(err || !book || !book.sheets.length){ toast('❌ 文件读取失败'); return; }
+    S1.book = book;
+    buildSheetPick(book, 's1Pick', 's1Sheet', s1ApplySheet);
+    s1ApplySheet();
   });
+}
+function s1ApplySheet(){
+  var book = S1.book; if(!book) return;
+  var sh = sheetFromSel(book, document.getElementById('s1Sheet'));
+  if(!sh || !sh.aoa.length){ toast('❌ 该子表为空'); return; }
+  var head = sh.aoa[0] || [];
+  var ipC = findCol(head, function(h){ return h === '设备ip'; });
+  if(ipC<0){ toast('❌ 未找到「设备IP」列，请检查表头'); return; }
+  S1.srcAoa = sh.aoa;
+  S1.srcName = book.fileName.replace(/\.[^.]+$/, '');
+  S1.cols = {
+    ipC: ipC,
+    nmC: findCol(head, function(h){ return h === '设备名称'; }),
+    stC: findCol(head, function(h){ return h === '通道状态'; }),
+    chC: findCol(head, function(h){ return h.indexOf('通道名称')>=0; })
+  };
+  s1BuildMap(head);
+  document.getElementById('s1ColRow').style.display = 'flex';
+  s1Analyze();
 }
 function s1Analyze(){
   var aoa = S1.srcAoa; if(!aoa) return;
@@ -884,30 +922,114 @@ function s2FindNameCol(header){
   }
   return -1;
 }
-/* --- 加载（保留全部原始列，与板块二一致） --- */
+/* --- 加载（保留全部原始列，与板块二一致；支持选择「全部」或指定子表） --- */
+function s2ReadBook(file, cb){
+  var fr = new FileReader();
+  fr.onload = function(e){
+    try {
+      var wb = XLSX.read(e.target.result, {type:'array'});
+      var sheets = [], best = -1, bestScore = -1;
+      for(var i=0;i<wb.SheetNames.length;i++){
+        var aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[i]], {header:1, defval:'', raw:false});
+        if(!aoa.length) continue;
+        var ipC = findCol(aoa[0], function(h){ return h.indexOf('ip')>=0; });
+        var score = ipC>=0 ? aoa.length : 0;
+        sheets.push({name:wb.SheetNames[i], aoa:aoa, ipC:ipC});
+        if(score > bestScore){ best = sheets.length-1; bestScore = score; }
+      }
+      if(!sheets.length && wb.SheetNames.length){
+        sheets.push({name:wb.SheetNames[0], aoa:XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false}), ipC:-1});
+      }
+      cb({fileName:file.name, sheets:sheets, best:best>=0?best:0}, null);
+    } catch(err){ cb(null, err); }
+  };
+  fr.readAsArrayBuffer(file);
+}
+/* 「全部」= 合并所有子表；表头与首个子表相同的后续子表自动去重表头行 */
+function s2MergeSheets(book){
+  var out = [];
+  book.sheets.forEach(function(sh){
+    if(!sh.aoa.length) return;
+    if(!out.length){ out = sh.aoa.slice(); return; }
+    var first = sh.aoa[0], h0 = out[0];
+    var same = h0 && first.length===h0.length && first.every(function(c,i){ return String(c==null?'':c).trim()===String(h0[i]==null?'':h0[i]).trim(); });
+    out = out.concat(same ? sh.aoa.slice(1) : sh.aoa);
+  });
+  return {name:'全部', aoa:out};
+}
+function s2ResetResult(){
+  document.getElementById('s2Out').style.display='none';
+  document.getElementById('s2Badge').className='badge wait';
+  document.getElementById('s2Badge').textContent='已上传';
+  document.getElementById('s2Export').disabled = true;
+  document.getElementById('s2Pass').disabled = true;
+}
+/* 通用：构建「全部/指定子表」下拉（步骤1/3 用，步骤2 有独立的槽位逻辑） */
+function buildSheetPick(book, pickId, selId, onApply){
+  var pick = document.getElementById(pickId);
+  var sel = document.getElementById(selId);
+  if(book.sheets.length > 1){
+    var html = '<option value="__all__">全部（合并 '+book.sheets.length+' 个子表）</option>';
+    book.sheets.forEach(function(s,i){ html += '<option value="'+i+'"'+(i===book.best?' selected':'')+'>'+esc(s.name)+'</option>'; });
+    sel.innerHTML = html;
+    pick.style.display='flex';
+    if(!sel._bound){ sel._bound = true; sel.addEventListener('change', function(){ onApply(); }); }
+  } else {
+    pick.style.display='none';
+    sel.innerHTML='';
+  }
+}
+function sheetFromSel(book, sel){
+  var val = sel ? sel.value : '';
+  return (val==='__all__') ? s2MergeSheets(book) : book.sheets[+val];
+}
 function s2LoadList(file, slot){
-  readSheet(file, function(sh, err){
-    if(err || !sh){ toast('❌ 文件读取失败'); return; }
-    var rows = s2TrimAOA(sh.aoa);
-    if(!rows.length){ toast('❌ 表格为空'); return; }
-    var header = s2NormalizeHeader(rows);
-    var data = s2FirstIsData(rows) ? rows : rows.slice(1);
-    var keyC = s2FindKeyCol(header); if(keyC < 0) keyC = 0;
-    var nmC = s2FindNameCol(header);
-    var n = 0;
-    data.forEach(function(r){ var k = String(r[keyC]==null?'':r[keyC]).trim(); if(k !== '') n++; });
-    S2[slot] = { header:header, data:data, key:keyC, name:nmC, label:file.name, sheet:sh.name, n:n };
-    var okEl = document.getElementById(slot==='left'?'s2LeftOk':'s2RightOk');
-    okEl.style.display='inline-block'; okEl.textContent = '✓ 已加载 '+n+' 条（'+file.name+'）';
-    s2Check();
+  s2ReadBook(file, function(book, err){
+    if(err || !book || !book.sheets.length){ toast('❌ 文件读取失败'); return; }
+    var pick = document.getElementById(slot==='left'?'s2LeftPick':'s2RightPick');
+    var sel = document.getElementById(slot==='left'?'s2LeftSheet':'s2RightSheet');
+    S2[slot+'Book'] = book;
+    if(book.sheets.length > 1){
+      var html = '<option value="__all__">全部（合并 '+book.sheets.length+' 个子表）</option>';
+      book.sheets.forEach(function(s,i){ html += '<option value="'+i+'"'+(i===book.best?' selected':'')+'>'+esc(s.name)+'</option>'; });
+      sel.innerHTML = html;
+      pick.style.display='flex';
+    } else {
+      pick.style.display='none';
+      sel.innerHTML = '';
+    }
+    s2ResetResult();
+    s2ApplySheet(slot, book.sheets.length > 1 ? sel.value : '0');
   });
 }
+function s2ApplySheet(slot, val){
+  var book = S2[slot+'Book']; if(!book) return;
+  var sh = (val==='__all__') ? s2MergeSheets(book) : book.sheets[+val];
+  if(!sh || !sh.aoa.length){ toast('❌ 该子表为空'); return; }
+  var rows = s2TrimAOA(sh.aoa);
+  if(!rows.length){ toast('❌ 表格为空'); return; }
+  var header = s2NormalizeHeader(rows);
+  var data = s2FirstIsData(rows) ? rows : rows.slice(1);
+  var keyC = s2FindKeyCol(header); if(keyC < 0) keyC = 0;
+  var nmC = s2FindNameCol(header);
+  var n = 0;
+  data.forEach(function(r){ var k = String(r[keyC]==null?'':r[keyC]).trim(); if(k !== '') n++; });
+  S2[slot] = { header:header, data:data, key:keyC, name:nmC, label:book.fileName, sheet:sh.name, n:n };
+  var okEl = document.getElementById(slot==='left'?'s2LeftOk':'s2RightOk');
+  okEl.style.display='inline-block'; okEl.textContent = '✓ 已加载 '+n+' 条（'+book.fileName+(book.sheets.length>1?' · '+sh.name:'')+'）';
+  s2Check();
+}
+document.getElementById('s2LeftSheet').addEventListener('change', function(){ s2ResetResult(); s2ApplySheet('left', this.value); });
+document.getElementById('s2RightSheet').addEventListener('change', function(){ s2ResetResult(); s2ApplySheet('right', this.value); });
 function s2SetRight(list, label){
   var header = ['设备IP','设备名称'];
   var data = list.map(function(x){ return [x.ip, x.name||'']; });
   S2.right = { header:header, data:data, key:0, name:1, label:label, sheet:label, n:data.length };
+  S2.rightBook = null;
+  document.getElementById('s2RightPick').style.display='none';
   var okEl = document.getElementById('s2RightOk');
   okEl.style.display='inline-block'; okEl.textContent = '✓ 已接收 '+data.length+' 条（'+label+'）';
+  s2ResetResult();
   s2Check();
 }
 function s2Check(){ document.getElementById('s2Run').disabled = !(S2.left && S2.right); }
@@ -1226,16 +1348,24 @@ function s3SetIPs(list, label){ S3.ips = list; S3.label = label; document.getEle
 document.getElementById('s3UsePrev').addEventListener('click', function(){ s3SetIPs(s2CollectPass(), s2PassLabel()); });
 document.getElementById('s3File').addEventListener('change', function(e){
   var file = e.target.files[0]; if(!file) return;
-  readSheet(file, function(sh, err){
-    if(err || !sh){ toast('❌ 文件读取失败'); return; }
-    var list = [];
-    for(var i=0;i<sh.aoa.length;i++){
-      var r = sh.aoa[i]; if(!r) continue;
-      for(var j=0;j<r.length;j++){ var ip = normIP(r[j]); if(ip){ list.push({ip:ip, name:'', st:'离线'}); break; } }
-    }
-    s3SetIPs(list, file.name);
+  s2ReadBook(file, function(book, err){
+    if(err || !book || !book.sheets.length){ toast('❌ 文件读取失败'); return; }
+    S3.book = book;
+    buildSheetPick(book, 's3Pick', 's3Sheet', s3ApplySheet);
+    s3ApplySheet();
   });
 });
+function s3ApplySheet(){
+  var book = S3.book; if(!book) return;
+  var sh = sheetFromSel(book, document.getElementById('s3Sheet'));
+  if(!sh || !sh.aoa.length){ toast('❌ 该子表为空'); return; }
+  var list = [];
+  for(var i=0;i<sh.aoa.length;i++){
+    var r = sh.aoa[i]; if(!r) continue;
+    for(var j=0;j<r.length;j++){ var ip = normIP(r[j]); if(ip){ list.push({ip:ip, name:'', st:'离线'}); break; } }
+  }
+  s3SetIPs(list, book.fileName+(book.sheets.length>1?' · '+sh.name:''));
+}
 document.getElementById('s3Run').addEventListener('click', function(){
   if(typeof EMBEDDED_IP_DB === 'undefined'){ toast('❌ 内置数据库缺失'); return; }
   var oldMap = {};
