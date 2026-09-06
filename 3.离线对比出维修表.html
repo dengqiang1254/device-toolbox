@@ -316,11 +316,24 @@ function buildIPDatabase(workbook) {
   
   function ensure(ip) {
     if (!ipDb[ip]) {
-      ipDb[ip] = {location: "", remark: "", direction: "", old_ip: ""};
+      ipDb[ip] = {location: "", remark: "", direction: "", old_ip: "", dev: ""};
     }
     return ipDb[ip];
   }
   
+  // 自动检测表头里的“设备名称”列(位置不固定)
+  let devCol = -1;
+  for (let row = 0; row < Math.min(5, data.length); row++) {
+    for (let col = 0; col < (data[row] || []).length; col++) {
+      const v = data[row][col];
+      if (v === null || v === undefined) continue;
+      const s = String(v).trim();
+      if (s && (s.includes("设备") || s.includes("名称") || s.includes("点位"))) {
+        if (col !== 4 && devCol === -1) devCol = col;
+      }
+    }
+  }
+
   // 从第2行开始（跳过表头）
   for (let row = 1; row < data.length; row++) {
     const row_data = data[row];
@@ -329,10 +342,17 @@ function buildIPDatabase(workbook) {
     // Col 2 = 地点 (index 1)
     const locVal = row_data[1];
     const location = (locVal !== null && locVal !== undefined) ? String(locVal).trim() : "";
-    
+
     // Col 3 = 方向 (index 2)
     const dirVal = row_data[2];
     const direction = (dirVal !== null && dirVal !== undefined) ? String(dirVal).trim() : "";
+
+    // 设备名称(列位置由表头自动检测)
+    let devName = "";
+    if (devCol !== -1) {
+      const dv = row_data[devCol];
+      if (dv !== null && dv !== undefined) devName = String(dv).trim();
+    }
     
     // Col 5 = IP地址 (index 4)
     const ipVal = row_data[4];
@@ -348,7 +368,8 @@ function buildIPDatabase(workbook) {
       const entry = ensure(ip);
       if (location && !entry.location) entry.location = location;
       if (direction && !entry.direction) entry.direction = direction;
-      
+      if (devName && !entry.dev) entry.dev = devName;
+
       if (remarkText && remarkText.includes("改")) {
         let mFrom = remarkText.match(/由(\d+\.\d+\.\d+\.\d+)改/);
         let mTo = remarkText.match(/改[为回成](\d+\.\d+\.\d+\.\d+)/);
@@ -370,6 +391,7 @@ function buildIPDatabase(workbook) {
           const newEntry = ensure(newIp);
           if (location && !newEntry.location) newEntry.location = location;
           if (direction && !newEntry.direction) newEntry.direction = direction;
+          if (devName && !newEntry.dev) newEntry.dev = devName;
           if (!newEntry.old_ip) newEntry.old_ip = ip;
           if (!newEntry.remark) newEntry.remark = "IP已改(原IP: " + ip + ")";
           if (!entry.remark) {
@@ -494,6 +516,17 @@ function prepareResults(results, ipDb) {
     const location = (info && info.location) ? info.location : "";
     const remark = (info && info.remark) ? info.remark : "";
     const direction = (info && info.direction) ? info.direction : "";
+    const devOrig = (info && info.dev) ? info.dev : "";
+    const devOffline = item.dev || "";
+    // 原表设备名称优先;两边都有且不同则合并展示
+    let dev = "";
+    if (devOrig && devOffline && devOrig !== devOffline) {
+      dev = devOrig + "（离线称:" + devOffline + "）";
+    } else if (devOrig) {
+      dev = devOrig;
+    } else if (devOffline) {
+      dev = devOffline;
+    }
     
     const found = !!(location || remark);
     stats.total++;
@@ -502,7 +535,7 @@ function prepareResults(results, ipDb) {
     
     dataRows.push({
       ip: item.ip,
-      dev: item.dev || "",
+      dev: dev,
       loc: location,
       dir: direction,
       remark: remark,
