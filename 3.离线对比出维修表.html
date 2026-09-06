@@ -321,16 +321,57 @@ function buildIPDatabase(workbook) {
     return ipDb[ip];
   }
   
-  // 自动检测表头里的“设备名称”列(位置不固定)
+  // 自动检测表头里的“设备名称”列(位置不固定,严格优先级避免误中“组织名称”)
+  const devStrictA = ["设备名称", "设备名"];
+  const devStrictB = ["摄像头类型", "设备类型", "机型", "型号", "终端名称"];
+  const devExclude = ["组织", "路口", "通道", "网点", "项目", "所属", "安装"];
   let devCol = -1;
-  for (let row = 0; row < Math.min(5, data.length); row++) {
+  // round A: 严格 “设备名称/设备名”
+  for (let row = 0; row < Math.min(5, data.length) && devCol === -1; row++) {
     for (let col = 0; col < (data[row] || []).length; col++) {
+      if (col === 4) continue;
       const v = data[row][col];
       if (v === null || v === undefined) continue;
       const s = String(v).trim();
-      if (s && (s.includes("设备") || s.includes("名称") || s.includes("点位"))) {
-        if (col !== 4 && devCol === -1) devCol = col;
+      if (devStrictA.indexOf(s) !== -1) { devCol = col; break; }
+    }
+  }
+  // round B: 严格 “摄像头类型/设备类型/机型/型号/终端名称”
+  for (let row = 0; row < Math.min(5, data.length) && devCol === -1; row++) {
+    for (let col = 0; col < (data[row] || []).length; col++) {
+      if (col === 4) continue;
+      const v = data[row][col];
+      if (v === null || v === undefined) continue;
+      const s = String(v).trim();
+      if (devStrictB.indexOf(s) !== -1) { devCol = col; break; }
+    }
+  }
+  // round C: 含 “设备/摄像头/终端”，排除“组织/路口/通道/网点/项目/所属/安装”修饰
+  for (let row = 0; row < Math.min(5, data.length) && devCol === -1; row++) {
+    for (let col = 0; col < (data[row] || []).length; col++) {
+      if (col === 4) continue;
+      const v = data[row][col];
+      if (v === null || v === undefined) continue;
+      const s = String(v).trim();
+      let excluded = false;
+      for (const ex of devExclude) { if (s.indexOf(ex) !== -1) { excluded = true; break; } }
+      if (excluded) continue;
+      if (s.indexOf("设备") !== -1 || s.indexOf("摄像头") !== -1 || s.indexOf("终端") !== -1) {
+        devCol = col; break;
       }
+    }
+  }
+  // round D: 点位 (兑底)
+  if (devCol === -1) {
+    for (let row = 0; row < Math.min(5, data.length); row++) {
+      for (let col = 0; col < (data[row] || []).length; col++) {
+        if (col === 4) continue;
+        const v = data[row][col];
+        if (v === null || v === undefined) continue;
+        const s = String(v).trim();
+        if (s && s.indexOf("点位") !== -1) { devCol = col; break; }
+      }
+      if (devCol !== -1) break;
     }
   }
 
@@ -435,18 +476,52 @@ function readOfflineFile(workbook, sheetName) {
   
   let ipCol = null, nameCol = null;
   
-  // 扫描前5行找表头
+  // 扫描前5行找表头(设备名称严格优先级)
+  const nameStrictA = ["设备名称", "设备名"];
+  const nameStrictB = ["摄像头类型", "设备类型", "机型", "型号", "终端名称"];
+  const nameExclude = ["组织", "路口", "通道", "网点", "项目", "所属", "安装"];
   for (let row = 0; row < Math.min(5, data.length); row++) {
     for (let col = 0; col < data[row].length; col++) {
       const val = data[row][col];
       if (val === null || val === undefined || val === "") continue;
-      const s = String(val).trim().toLowerCase();
-      if (ipCol === null && (s.includes("ip") || s.includes("地址") || s.includes("离线"))) {
+      const s = String(val).trim();
+      const sl = s.toLowerCase();
+      if (ipCol === null && (sl.includes("ip") || sl.includes("地址") || sl.includes("离线"))) {
         ipCol = col;
       }
-      if (nameCol === null && col !== ipCol && (s.includes("名称") || s.includes("设备") || s.includes("点位"))) {
-        nameCol = col;
+      if (nameCol === null && col !== ipCol) {
+        // round A: 严格设备名称/设备名
+        if (nameStrictA.indexOf(s) !== -1) { nameCol = col; }
       }
+    }
+  }
+  if (nameCol === null) {
+    for (let row = 0; row < Math.min(5, data.length); row++) {
+      for (let col = 0; col < data[row].length; col++) {
+        const val = data[row][col];
+        if (val === null || val === undefined || val === "") continue;
+        const s = String(val).trim();
+        if (col === ipCol) continue;
+        if (nameStrictB.indexOf(s) !== -1) { nameCol = col; break; }
+      }
+      if (nameCol !== null) break;
+    }
+  }
+  if (nameCol === null) {
+    for (let row = 0; row < Math.min(5, data.length); row++) {
+      for (let col = 0; col < data[row].length; col++) {
+        const val = data[row][col];
+        if (val === null || val === undefined || val === "") continue;
+        const s = String(val).trim();
+        if (col === ipCol) continue;
+        let excluded = false;
+        for (const ex of nameExclude) { if (s.indexOf(ex) !== -1) { excluded = true; break; } }
+        if (excluded) continue;
+        if (s.indexOf("设备") !== -1 || s.indexOf("摄像头") !== -1 || s.indexOf("终端") !== -1) {
+          nameCol = col; break;
+        }
+      }
+      if (nameCol !== null) break;
     }
   }
   
