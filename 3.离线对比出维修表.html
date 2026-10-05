@@ -704,6 +704,17 @@ function prepareResults(results, ipDb) {
     if (found) stats.found++; else stats.not_found++;
     if (remark) stats.has_remark++;
     
+    // 内置库数据（H列）：该IP在内置EMBEDDED_IP_DB中的 路口|方向|原表备注
+    const bi = EMBEDDED_IP_DB[item.ip];
+    let builtin = "";
+    if (bi) {
+      const parts = [];
+      if (bi.location) parts.push(bi.location);
+      if (bi.direction) parts.push(bi.direction);
+      if (bi.remark) parts.push(bi.remark);
+      builtin = parts.join("｜");
+    }
+
     dataRows.push({
       ip: item.ip,
       dev: dev,
@@ -711,6 +722,7 @@ function prepareResults(results, ipDb) {
       dir: direction,
       remark: remark,
       note: note,
+      builtin: builtin,
       found: found,
       has_remark: !!remark
     });
@@ -742,7 +754,7 @@ function renderDetailTable(dataRows) {
   const table = document.getElementById("detailTable");
   
   // 表头
-  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注"];
+  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注", "内置数据"];
   let html = "<thead><tr>";
   for (const h of headers) {
     html += "<th>" + h + "</th>";
@@ -822,6 +834,7 @@ function renderDetailTable(dataRows) {
     
     html += '<td>' + escapeHtml(r.remark) + '</td>';
     html += '<td>' + escapeHtml(r.note || "") + '</td>';
+    html += '<td>' + escapeHtml(r.builtin || "") + '</td>';
     html += '</tr>';
   }
   
@@ -903,8 +916,8 @@ async function exportExcel() {
 
   // 表头
   const hRow = ws.getRow(1);
-  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注"];
-  for (let c = 1; c <= 7; c++) {
+  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注", "内置数据"];
+  for (let c = 1; c <= 8; c++) {
     const cell = hRow.getCell(c);
     cell.value = headers[c - 1];
     cell.font = headerFont;
@@ -941,9 +954,9 @@ async function exportExcel() {
     else if (r.has_remark) fill = noteFill;
     else fill = groupToggle ? groupFillA : groupFillB;
 
-    const vals = [i + 1, r.ip, r.dev, r.dir, r.loc, r.remark, r.note || ""];
+    const vals = [i + 1, r.ip, r.dev, r.dir, r.loc, r.remark, r.note || "", r.builtin || ""];
     const row = ws.getRow(idx);
-    for (let c = 1; c <= 7; c++) {
+    for (let c = 1; c <= 8; c++) {
       const cell = row.getCell(c);
       const v = vals[c - 1];
       cell.value = (v === "" || v === undefined || v === null) ? null : v;
@@ -964,7 +977,7 @@ async function exportExcel() {
   }
 
   // 列宽
-  const detailWidths = [6, 20, 40, 10, 35, 30, 30];
+  const detailWidths = [6, 20, 40, 10, 35, 30, 30, 30];
   detailWidths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 
   // ===== 汇总子表（多子表时以子表名+汇总命名） =====
