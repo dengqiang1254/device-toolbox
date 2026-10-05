@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 静态服务不下发 Cache-Control，浏览器会缓存旧页面导致更新看不到 -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>设备工具箱 · 离线版</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
