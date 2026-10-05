@@ -1558,7 +1558,7 @@ document.getElementById('s3Run').addEventListener('click', function(){
   var oldMap = {}, oldMapC = {};
   Object.keys(EMBEDDED_IP_DB).forEach(function(ip){ var o = EMBEDDED_IP_DB[ip].old_ip; if(o){ var oo = normIP(o); if(oo && !oldMap[oo]) oldMap[oo] = ip; } });
   if(CDB) Object.keys(CDB).forEach(function(ip){ var o = CDB[ip].old_ip; if(o){ var oo = normIP(o); if(oo && !oldMapC[oo]) oldMapC[oo] = ip; } });
-  var rows = [], matched=0, notFound=0, hasRemark=0, diffCount=0, byLoc = {}, nOff=0, nFix=0;
+  var rows = [], matched=0, notFound=0, hasRemark=0, diffCount=0, backfilled=0, byLoc = {}, nOff=0, nFix=0;
   var coll = new Intl.Collator('zh-Hans-CN');
   function cmpV(a,b){ return String(a==null?'':a).trim() !== String(b==null?'':b).trim(); }
   S3.ips.forEach(function(x){
@@ -1575,6 +1575,15 @@ document.getElementById('s3Run').addEventListener('click', function(){
       else { var alt = oldMap[x.ip]; if(alt && EMBEDDED_IP_DB[alt]){ rec = EMBEDDED_IP_DB[alt]; via='原IP回溯'; src='embed'; } }
     }
     if(rec){
+      /* 自定义库该IP路口/方向为空时，用内置库补空（只补空，不覆盖自定义已有值） */
+      if(src==='custom' && (!rec.location || !rec.direction)){
+        var eFill = EMBEDDED_IP_DB[x.ip];
+        if(eFill && (eFill.location || eFill.direction)){
+          rec = { location: rec.location || eFill.location || '', direction: rec.direction || eFill.direction || '',
+                  remark: rec.remark || '', note: rec.note || '', dev: rec.dev || eFill.dev || '', old_ip: rec.old_ip || '' };
+          backfilled++;
+        }
+      }
       matched++;
       var remark = rec.remark||''; if(remark) hasRemark++;
       var name = rec.dev || x.name || '';
@@ -1641,7 +1650,7 @@ document.getElementById('s3Run').addEventListener('click', function(){
     s3RenderSummary(document.getElementById('s3SumTbl'), S3.offRows);
   }
   document.getElementById('s3Export').disabled = S3.ips.length===0;
-  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB&&diffCount?(' / 与内置库不同 '+diffCount):''));
+  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB&&diffCount?(' / 与内置库不同 '+diffCount):'') + (backfilled?(' / 内置库补空 '+backfilled):''));
 });
 /* ===== 步骤3 输出结构（与参考 Excel「对比差异结果」一致）===== */
 /* 按路口→方向分组（行已按路口/方向排序），返回 [{key:路口, n:总数, dirs:[{dir, rows}]}]；未匹配 key='' */

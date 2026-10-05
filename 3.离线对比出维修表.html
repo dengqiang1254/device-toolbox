@@ -679,15 +679,25 @@ function readOfflineFile(workbook, sheetName) {
 // ==================== 准备结果（匹配+排序） ====================
 function prepareResults(results, ipDb) {
   let dataRows = [];
-  let stats = {total: 0, found: 0, not_found: 0, has_remark: 0};
+  let stats = {total: 0, found: 0, not_found: 0, has_remark: 0, backfilled: 0};
   
   for (const item of results) {
     const info = ipDb[item.ip];
-    const location = (info && info.location) ? info.location : "";
-    const remark = (info && info.remark) ? info.remark : "";
+    let location = (info && info.location) ? info.location : "";
+    let remark = (info && info.remark) ? info.remark : "";
     const note = (info && info.note) ? info.note : "";
-    const direction = (info && info.direction) ? info.direction : "";
-    const devOrig = (info && info.dev) ? info.dev : "";
+    let direction = (info && info.direction) ? info.direction : "";
+    let devOrig = (info && info.dev) ? info.dev : "";
+    // 原表该IP无路口/备注时，用内置库补空（只补空，不覆盖原表已有值）
+    if (ipDb !== EMBEDDED_IP_DB && (!location || !remark)) {
+      const fb = EMBEDDED_IP_DB[item.ip];
+      if (fb) {
+        if (!location && fb.location) { location = fb.location; stats.backfilled++; }
+        if (!remark && fb.remark) remark = fb.remark;
+        if (!direction && fb.direction) direction = fb.direction;
+        if (!devOrig && fb.dev) devOrig = fb.dev;
+      }
+    }
     const devOffline = item.dev || "";
     // 原表设备名称优先;两边都有且不同则合并展示
     let dev = "";
@@ -1134,7 +1144,9 @@ function setupDragDrop(zoneId, inputId, handler) {
   
   input.addEventListener("change", function(e) {
     if (e.target.files.length > 0) {
-      handler(e.target.files[0]);
+      const f = e.target.files[0];
+      setTimeout(function(){ input.value = ""; }, 0);
+      handler(f);
     }
   });
   
@@ -1179,7 +1191,8 @@ function handleOrigFile(file) {
       checkMatchReady();
     } catch (err) {
       hideProgress();
-      alert("读取原表失败: " + err.message);
+      const locked = err && (err.name === "NotReadableError" || /readable|lock|permission/i.test(err.message || ""));
+      alert(locked ? "读取原表失败：文件被占用，可能正被 WPS/Excel 打开。请先关闭它再重新选择，或复制一份后再选。" : "读取原表失败: " + err.message);
     }
   };
   reader.readAsArrayBuffer(file);
@@ -1223,7 +1236,8 @@ function handleOfflineFile(file) {
       checkMatchReady();
     } catch (err) {
       hideProgress();
-      alert("读取离线文件失败: " + err.message);
+      const locked = err && (err.name === "NotReadableError" || /readable|lock|permission/i.test(err.message || ""));
+      alert(locked ? "读取离线文件失败：文件被占用，可能正被 WPS/Excel 打开。请先关闭它再重新选择，或复制一份后再选。" : "读取离线文件失败: " + err.message);
     }
   };
   reader.readAsArrayBuffer(file);
