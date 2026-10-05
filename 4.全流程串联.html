@@ -159,6 +159,9 @@
   td.st-on { background: #C6EFCE; color: #006100; text-align: center; font-weight: 600; }
   td.st-off { background: #FFC7CE; color: #9C0006; text-align: center; font-weight: 600; }
   td.cell-fail { color: #DC2626; font-weight: 700; }
+  td.cell-diff { background: #FFF2CC !important; }
+  .diff-tag { color: #C00000; font-weight: 700; font-size: 11px; }
+  #s3DbInfo { align-self: center; font-size: 12.5px; color: #4b6b5b; }
   .car-tag { display: inline-block; padding: 2px 10px; border-radius: 11px; font-size: 11.5px; font-weight: 600; }
   .car-电信 { background: #dbe9fb; color: #1d4ed8; }
   .car-移动 { background: #e7f6ed; color: #15803d; }
@@ -420,7 +423,13 @@
           <div class="tbl-wrap s3grp"><table id="s3SumTbl"></table></div>
         </div>
       </div>
-      <div class="note">使用内置安装位置数据库（约 2 万条，与板块三相同）按 IP 匹配；IP 有变更记录的会自动按原 IP 回溯匹配。</div>
+      <div class="note">默认使用内置安装位置数据库（约 2 万条，与板块三相同）按 IP 匹配；IP 有变更记录的会自动按原 IP 回溯匹配。也可在下面载入自定义安装位置表（如分类工具导出的全量数据）替代内置库——与内置库内容不同的字段会同时显示两者并标黄提醒。</div>
+      <div class="btns" id="s3DbBar">
+        <label class="btn ghost" for="s3DbFile" style="cursor:pointer">📁 载入自定义安装位置表</label>
+        <input type="file" id="s3DbFile" accept=".xlsx,.xls,.csv" style="display:none">
+        <button class="btn ghost" id="s3DbClear" style="display:none">✕ 清除自定义库</button>
+        <span id="s3DbInfo">匹配库：内置（约 2 万条）</span>
+      </div>
     </div>
   </div>
 
@@ -1348,6 +1357,177 @@ document.getElementById('s2Export').addEventListener('click', function(){
   });
 });
 
+/* ===== 自定义安装位置库（与板块三同款识别逻辑，精简移植） ===== */
+var S3_DB = { db: null, name: '', count: 0 };
+var S3_DB_IPRE = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+function s3dbHasChinese(s){ return /[\u4e00-\u9fff]/.test(String(s||'')); }
+function s3dbExtractIPs(text){ return String(text==null?'':text).match(S3_DB_IPRE) || []; }
+function s3dbDetectCols(data){
+  var FIXED = { headerRow:0, loc:1, dir:2, ip:4, rem:7, rems:[7], remSrc:[7], origRem:-1, note:-1, dev:-1, auto:false };
+  function norm(v){ return String(v===null||v===undefined?'':v).replace(/[\s\u3000]+/g,''); }
+  var scan = Math.min(5, data.length), best = null;
+  for(var row=0; row<scan; row++){
+    var arr = data[row]||[];
+    var c = { row:row, loc:-1, locStrong:-1, dir:-1, ip:-1, rems:[], remExact:-1, origRem:-1, dev:-1, hits:0 };
+    for(var col=0; col<arr.length; col++){
+      var s = norm(arr[col]); if(!s) continue;
+      var sl = s.toLowerCase();
+      if(c.ip===-1 && sl.indexOf('ip')===0 && sl.length<=8){ c.ip=col; c.hits++; continue; }
+      if(c.dir===-1 && s.indexOf('方向')!==-1){ c.dir=col; c.hits++; continue; }
+      if(c.locStrong===-1 && s.indexOf('所属路口')!==-1){ c.locStrong=col; c.hits++; continue; }
+      if(c.loc===-1 && (s.indexOf('地点')!==-1 || s.indexOf('路口')!==-1)){ c.loc=col; c.hits++; continue; }
+      if(c.origRem===-1 && s.indexOf('原表备注')!==-1){ c.origRem=col; c.hits++; continue; }
+      if(s.indexOf('备注')!==-1){
+        if(s==='备注' && c.remExact===-1) c.remExact=col;
+        if(c.rems.indexOf(col)===-1) c.rems.push(col);
+        c.hits++; continue;
+      }
+      if(c.dev===-1 && (s.indexOf('设备名称')!==-1 || s.indexOf('设备名')!==-1)){ c.dev=col; c.hits++; continue; }
+    }
+    if(!best || c.hits>best.hits) best=c;
+  }
+  if(!best || best.ip===-1 || best.hits<3) return FIXED;
+  var rems=[];
+  if(best.remExact!==-1) rems.push(best.remExact);
+  for(var i=0;i<best.rems.length;i++){ if(rems.indexOf(best.rems[i])===-1) rems.push(best.rems[i]); }
+  if(!rems.length) rems.push(FIXED.rem);
+  var origRem = best.origRem, note = -1;
+  if(origRem!==-1 && best.remExact!==-1 && best.remExact!==origRem) note = best.remExact;
+  var remSrc=[];
+  if(origRem!==-1) remSrc.push(origRem);
+  for(var i2=0;i2<rems.length;i2++){
+    if(rems[i2]===origRem || rems[i2]===note) continue;
+    if(remSrc.indexOf(rems[i2])===-1) remSrc.push(rems[i2]);
+  }
+  if(!remSrc.length) remSrc = rems;
+  return { headerRow:best.row, loc:(best.locStrong!==-1?best.locStrong:(best.loc!==-1?best.loc:FIXED.loc)), dir:(best.dir!==-1?best.dir:FIXED.dir), ip:best.ip, rem:rems[0], rems:rems, remSrc:remSrc, origRem:origRem, note:note, dev:best.dev, auto:true };
+}
+function s3dbBuild(data){
+  var COLS = s3dbDetectCols(data);
+  var ipDb = {};
+  function ensure(ip){ if(!ipDb[ip]) ipDb[ip] = {location:'', remark:'', note:'', direction:'', old_ip:'', dev:''}; return ipDb[ip]; }
+  var devStrictA = ['设备名称','设备名'], devStrictB = ['摄像头类型','设备类型','机型','型号','终端名称'];
+  var devExclude = ['组织','路口','通道','网点','项目','所属','安装'];
+  var devCol = -1, row, col;
+  for(row=0; row<Math.min(5,data.length) && devCol===-1; row++){
+    for(col=0; col<(data[row]||[]).length; col++){
+      if(col===COLS.ip) continue;
+      var v1 = data[row][col]; if(v1===null||v1===undefined) continue;
+      if(devStrictA.indexOf(String(v1).trim())!==-1){ devCol=col; break; }
+    }
+  }
+  for(row=0; row<Math.min(5,data.length) && devCol===-1; row++){
+    for(col=0; col<(data[row]||[]).length; col++){
+      if(col===COLS.ip) continue;
+      var v2 = data[row][col]; if(v2===null||v2===undefined) continue;
+      if(devStrictB.indexOf(String(v2).trim())!==-1){ devCol=col; break; }
+    }
+  }
+  for(row=0; row<Math.min(5,data.length) && devCol===-1; row++){
+    for(col=0; col<(data[row]||[]).length; col++){
+      if(col===COLS.ip) continue;
+      var v3 = data[row][col]; if(v3===null||v3===undefined) continue;
+      var sv = String(v3).trim(), excluded=false;
+      for(var ei=0; ei<devExclude.length; ei++){ if(sv.indexOf(devExclude[ei])!==-1){ excluded=true; break; } }
+      if(excluded) continue;
+      if(sv.indexOf('设备')!==-1 || sv.indexOf('摄像头')!==-1 || sv.indexOf('终端')!==-1){ devCol=col; break; }
+    }
+  }
+  if(devCol===-1){
+    for(row=0; row<Math.min(5,data.length) && devCol===-1; row++){
+      for(col=0; col<(data[row]||[]).length; col++){
+        if(col===COLS.ip) continue;
+        var v4 = data[row][col]; if(v4===null||v4===undefined) continue;
+        var s4 = String(v4).trim();
+        if(s4 && s4.indexOf('点位')!==-1){ devCol=col; break; }
+      }
+    }
+  }
+  if(COLS.dev!==-1) devCol = COLS.dev;
+
+  for(var row2=COLS.headerRow+1; row2<data.length; row2++){
+    var rd = data[row2]; if(!rd || !rd.length) continue;
+    var locVal = rd[COLS.loc]; var location = (locVal!==null && locVal!==undefined) ? String(locVal).trim() : '';
+    var dirVal = rd[COLS.dir]; var direction = (dirVal!==null && dirVal!==undefined) ? String(dirVal).trim() : '';
+    var devName = '';
+    if(devCol!==-1){ var dvv = rd[devCol]; if(dvv!==null && dvv!==undefined) devName = String(dvv).trim(); }
+    var ipVal = rd[COLS.ip]; if(ipVal===null || ipVal===undefined || ipVal==='') continue;
+    var rawIps = s3dbExtractIPs(ipVal); if(!rawIps.length) continue;
+    var remSrc = COLS.remSrc || COLS.rems;
+    var remarkText = '';
+    for(var ri=0; ri<remSrc.length; ri++){
+      var rv = rd[remSrc[ri]]; var rt = (rv!==null && rv!==undefined) ? String(rv).trim() : '';
+      if(rt){ remarkText = rt; break; }
+    }
+    var noteText = '';
+    if(COLS.note!==-1){ var nv = rd[COLS.note]; noteText = (nv!==null && nv!==undefined) ? String(nv).replace(/[\t\r\n]+/g,' ').trim() : ''; }
+    for(var ii=0; ii<rawIps.length; ii++){
+      var ip = normIP(rawIps[ii]); if(!ip) continue;
+      var entry = ensure(ip);
+      if(location && !entry.location) entry.location = location;
+      if(direction && !entry.direction) entry.direction = direction;
+      if(devName && !entry.dev) entry.dev = devName;
+      if(noteText && !entry.note) entry.note = noteText;
+      if(remarkText && remarkText.indexOf('改')!==-1){
+        var mFrom = remarkText.match(/由(\d+\.\d+\.\d+\.\d+)改/);
+        var mTo = remarkText.match(/改[为回成](\d+\.\d+\.\d+\.\d+)/);
+        if(mFrom){
+          var oldIp = mFrom[1];
+          entry.old_ip = oldIp;
+          var extra = remarkText.replace(/由\d+\.\d+\.\d+\.\d+改[回]?/g,'').replace(/Ip没有改[，,]?/gi,'').trim().replace(/^[，,。.\s]+|[，,。.\s]+$/g,'');
+          if(extra && s3dbHasChinese(extra) && extra!=='改') entry.remark = 'IP已改(原IP: '+oldIp+') '+extra;
+          else entry.remark = 'IP已改(原IP: '+oldIp+')';
+        } else if(mTo){
+          var newIp = mTo[1];
+          var ne = ensure(normIP(newIp)||newIp);
+          if(location && !ne.location) ne.location = location;
+          if(direction && !ne.direction) ne.direction = direction;
+          if(devName && !ne.dev) ne.dev = devName;
+          if(noteText && !ne.note) ne.note = noteText;
+          if(!ne.old_ip) ne.old_ip = ip;
+          if(!ne.remark) ne.remark = 'IP已改(原IP: '+ip+')';
+          if(!entry.remark){
+            var extra2 = remarkText.replace(/改[为回成]\d+\.\d+\.\d+\.\d+/g,'').replace(/Ip没有改[，,]?/gi,'').trim().replace(/^[，,。.\s]+|[，,。.\s]+$/g,'');
+            if(extra2 && s3dbHasChinese(extra2) && extra2!=='改') entry.remark = 'IP已改(改为: '+newIp+') '+extra2;
+            else entry.remark = 'IP已改(改为: '+newIp+')';
+          }
+        } else if(remarkText.indexOf('Ip没有改')!==-1 || remarkText.indexOf('IP没有改')!==-1){
+          var extra3 = remarkText.replace(/Ip没有改[，,]?/gi,'').trim().replace(/^[，,。.\s]+|[，,。.\s]+$/g,'');
+          if(extra3 && s3dbHasChinese(extra3) && extra3!=='改' && !entry.remark) entry.remark = extra3;
+        } else {
+          if(!entry.remark) entry.remark = remarkText;
+        }
+      } else {
+        if(remarkText && !entry.remark){
+          if(remarkText !== '无' && s3dbHasChinese(remarkText)) entry.remark = remarkText;
+        }
+      }
+    }
+  }
+  return { db:ipDb, cols:COLS, count:Object.keys(ipDb).length };
+}
+document.getElementById('s3DbFile').addEventListener('change', function(e){
+  var file = e.target.files[0]; if(!file) return;
+  s2ReadBook(file, function(book, err){
+    if(err || !book || !book.sheets.length){ toast('❌ 安装位置表读取失败'); return; }
+    var aoa = book.sheets[book.best>=0?book.best:0].aoa;
+    var res = null;
+    try { res = s3dbBuild(aoa); } catch(err2){ toast('❌ 解析失败：' + (err2&&err2.message||err2)); return; }
+    if(!res.count){ toast('❌ 未识别到 IP 数据，无法作为安装位置库'); return; }
+    S3_DB.db = res.db; S3_DB.name = file.name; S3_DB.count = res.count;
+    document.getElementById('s3DbInfo').textContent = '匹配库：自定义「' + file.name + '」（' + res.count + ' 条 IP）';
+    document.getElementById('s3DbClear').style.display = '';
+    toast('✅ 已载入自定义安装位置库（' + res.count + ' 条 IP），重新点击「开始匹配」生效');
+  });
+  e.target.value = '';
+});
+document.getElementById('s3DbClear').addEventListener('click', function(){
+  S3_DB.db = null; S3_DB.name = ''; S3_DB.count = 0;
+  document.getElementById('s3DbInfo').textContent = '匹配库：内置（约 2 万条）';
+  document.getElementById('s3DbClear').style.display = 'none';
+  toast('已清除自定义库，恢复使用内置库');
+});
+
 /* ================= 步骤 3 ================= */
 var S3 = { ips: [], rows: [], fixRows: [], offRows: [], summary: [], label: '' };
 function s3SetIPs(list, label){ S3.ips = list; S3.label = label; document.getElementById('s3Run').disabled = list.length===0; toast('✅ 已接收 '+list.length+' 条（'+label+'），点击开始匹配'); }
@@ -1374,21 +1554,44 @@ function s3ApplySheet(){
 }
 document.getElementById('s3Run').addEventListener('click', function(){
   if(typeof EMBEDDED_IP_DB === 'undefined'){ toast('❌ 内置数据库缺失'); return; }
-  var oldMap = {};
+  var CDB = S3_DB.db || null;
+  var oldMap = {}, oldMapC = {};
   Object.keys(EMBEDDED_IP_DB).forEach(function(ip){ var o = EMBEDDED_IP_DB[ip].old_ip; if(o){ var oo = normIP(o); if(oo && !oldMap[oo]) oldMap[oo] = ip; } });
-  var rows = [], matched=0, notFound=0, hasRemark=0, byLoc = {}, nOff=0, nFix=0;
+  if(CDB) Object.keys(CDB).forEach(function(ip){ var o = CDB[ip].old_ip; if(o){ var oo = normIP(o); if(oo && !oldMapC[oo]) oldMapC[oo] = ip; } });
+  var rows = [], matched=0, notFound=0, hasRemark=0, diffCount=0, byLoc = {}, nOff=0, nFix=0;
   var coll = new Intl.Collator('zh-Hans-CN');
+  function cmpV(a,b){ return String(a==null?'':a).trim() !== String(b==null?'':b).trim(); }
   S3.ips.forEach(function(x){
     if(x.st==='新修复') nFix++; else nOff++;
-    var rec = EMBEDDED_IP_DB[x.ip];
-    var via = '';
-    if(!rec){ var alt = oldMap[x.ip]; if(alt && EMBEDDED_IP_DB[alt]){ rec = EMBEDDED_IP_DB[alt]; via='原IP回溯'; } }
+    var rec=null, via='', src='';
+    if(CDB){
+      rec = CDB[x.ip];
+      if(rec){ src='custom'; }
+      else { var altC = oldMapC[x.ip]; if(altC && CDB[altC]){ rec = CDB[altC]; via='原IP回溯'; src='custom'; } }
+      if(!rec){ var eFb = EMBEDDED_IP_DB[x.ip]; if(eFb){ rec = eFb; src='embed'; } }
+    } else {
+      rec = EMBEDDED_IP_DB[x.ip];
+      if(rec){ src='embed'; }
+      else { var alt = oldMap[x.ip]; if(alt && EMBEDDED_IP_DB[alt]){ rec = EMBEDDED_IP_DB[alt]; via='原IP回溯'; src='embed'; } }
+    }
     if(rec){
       matched++;
       var remark = rec.remark||''; if(remark) hasRemark++;
-      rows.push({ip:x.ip, name:x.name||'', st:x.st||'离线', loc:rec.location||'', dir:rec.direction||'', remark:remark+(via?'（'+via+'）':''), found:true});
+      var name = rec.dev || x.name || '';
+      var note = rec.note || '';
+      var diffs = [];
+      if(src==='custom'){
+        var e0 = EMBEDDED_IP_DB[x.ip];
+        if(e0){
+          if(cmpV(rec.location, e0.location)) diffs.push(['loc', rec.location||'', e0.location||'']);
+          if(cmpV(rec.direction, e0.direction)) diffs.push(['dir', rec.direction||'', e0.direction||'']);
+          if(cmpV(rec.remark, e0.remark)) diffs.push(['rem', rec.remark||'', e0.remark||'']);
+        }
+        if(diffs.length) diffCount++;
+      }
+      rows.push({ip:x.ip, name:name, st:x.st||'离线', loc:rec.location||'', dir:rec.direction||'', remark:remark+(via?'（'+via+'）':''), note:note, found:true, diffs:diffs});
       var b = byLoc[rec.location||'（未知）'] = byLoc[rec.location||'（未知）'] || {n:0, list:[]}; b.n++; b.list.push(rows[rows.length-1]);
-    } else { notFound++; rows.push({ip:x.ip, name:x.name||'', st:x.st||'离线', loc:'', dir:'', remark:'', found:false}); }
+    } else { notFound++; rows.push({ip:x.ip, name:x.name||'', st:x.st||'离线', loc:'', dir:'', remark:'', note:'', found:false, diffs:[]}); }
   });
   /* 方向按「东西南北」顺序 */
   var DIR_ORDER = ['东','西','南','北'];
@@ -1425,6 +1628,7 @@ document.getElementById('s3Run').addEventListener('click', function(){
     '<div class="stat on"><div class="v">'+matched+'</div><div class="l">匹配成功</div></div>' +
     '<div class="stat"><div class="v">'+notFound+'</div><div class="l">未找到</div></div>' +
     '<div class="stat blue"><div class="v">'+hasRemark+'</div><div class="l">有备注提醒</div></div>' +
+    '<div class="stat orange"><div class="v">'+diffCount+'</div><div class="l">与内置库不同</div></div>' +
     '<div class="stat blue"><div class="v">'+locs.length+'</div><div class="l">涉及路口/地点</div></div>';
   document.getElementById('s3FixSec').style.display = S3.fixRows.length ? 'block' : 'none';
   document.getElementById('s3OffSec').style.display = S3.offRows.length ? 'block' : 'none';
@@ -1437,7 +1641,7 @@ document.getElementById('s3Run').addEventListener('click', function(){
     s3RenderSummary(document.getElementById('s3SumTbl'), S3.offRows);
   }
   document.getElementById('s3Export').disabled = S3.ips.length===0;
-  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound);
+  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB&&diffCount?(' / 与内置库不同 '+diffCount):''));
 });
 /* ===== 步骤3 输出结构（与参考 Excel「对比差异结果」一致）===== */
 /* 按路口→方向分组（行已按路口/方向排序），返回 [{key:路口, n:总数, dirs:[{dir, rows}]}]；未匹配 key='' */
@@ -1462,10 +1666,14 @@ function s3SumList(rows){
   if(unmatched) list.push(['(未匹配)', unmatched]);
   return list;
 }
-/* 屏幕明细表：序号/IP地址/设备名称/方向/所属路口/原表备注，方向与所属路口按组合并（rowspan） */
+/* 屏幕明细表：序号/IP地址/设备名称/方向/所属路口/原表备注/备注，方向与所属路口按组合并（rowspan） */
+function s3DiffTd(r, key, val){
+  if(r.diffs){ for(var k=0;k<r.diffs.length;k++){ if(r.diffs[k][0]===key) return esc(val)+' <span class="diff-tag">⚠内置:'+esc(r.diffs[k][2])+'</span>'; } }
+  return esc(val);
+}
 function s3RenderDetail(tbl, rows){
   var groups = s3LocGroups(rows);
-  var h = '<tr><th>序号</th><th>IP地址</th><th>设备名称</th><th>方向</th><th>所属路口</th><th>原表备注</th></tr>';
+  var h = '<tr><th>序号</th><th>IP地址</th><th>设备名称</th><th>方向</th><th>所属路口</th><th>原表备注</th><th>备注</th></tr>';
   var idx = 0, gi = 0;
   groups.forEach(function(g){
     /* 分组交替：第1组浅蓝、第2组白色…；未匹配组黄色（与参考 Excel 一致） */
@@ -1474,12 +1682,13 @@ function s3RenderDetail(tbl, rows){
       d.rows.forEach(function(r, ri){
         h += '<tr'+(gcls?' class="'+gcls+'"':'')+'><td>'+(++idx)+'</td><td class="ip">'+esc(r.ip)+'</td><td>'+esc(r.name)+'</td>';
         if(g.key===''){ h += '<td></td>'; }
-        else if(d.rows.length>1){ h += (ri===0 ? '<td class="dir" rowspan="'+d.rows.length+'">'+esc(r.dir)+'</td>' : ''); }
-        else { h += '<td class="dir">'+esc(r.dir)+'</td>'; }
+        else if(d.rows.length>1){ h += (ri===0 ? '<td class="dir" rowspan="'+d.rows.length+'">'+s3DiffTd(r,'dir',r.dir)+'</td>' : ''); }
+        else { h += '<td class="dir">'+s3DiffTd(r,'dir',r.dir)+'</td>'; }
         if(g.key===''){ h += '<td class="cell-fail">未匹配</td>'; }
-        else if(g.n>1){ h += (di===0 && ri===0 ? '<td class="loc" rowspan="'+g.n+'">'+esc(g.key)+'</td>' : ''); }
-        else { h += '<td class="loc">'+esc(g.key)+'</td>'; }
-        h += '<td>'+esc(r.remark)+'</td></tr>';
+        else if(g.n>1){ h += (di===0 && ri===0 ? '<td class="loc" rowspan="'+g.n+'">'+s3DiffTd(r,'loc',g.key)+'</td>' : ''); }
+        else { h += '<td class="loc">'+s3DiffTd(r,'loc',g.key)+'</td>'; }
+        h += '<td'+((r.diffs&&r.diffs.some(function(d){return d[0]==='rem';}))?' class="cell-diff"':'')+'>'+s3DiffTd(r,'rem',r.remark)+'</td>';
+        h += '<td>'+esc(r.note||'')+'</td></tr>';
       });
     });
   });
@@ -1496,10 +1705,16 @@ function s3RenderSummary(tbl, rows){
 var S3_BORDER = { left:{style:'thin'}, right:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} };
 var S3_HDR_S = { fill:{fgColor:{rgb:'2F5496'}}, font:{name:'微软雅黑', bold:true, color:{rgb:'FFFFFF'}, sz:11}, alignment:{horizontal:'center', vertical:'center'} };
 function s3DetailSheet(rows){
-  var aoa = [['序号','IP地址','设备名称','方向','所属路口','原表备注']];
-  rows.forEach(function(r, i){ aoa.push([i+1, r.ip, r.name, r.found?r.dir:'', r.found?r.loc:'', r.remark]); });
+  var aoa = [['序号','IP地址','设备名称','方向','所属路口','原表备注','备注']];
+  rows.forEach(function(r, i){
+    var dv = {}; (r.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
+    var dirV = r.found?r.dir:''; if(dv.dir) dirV += ' ⚠内置:' + dv.dir;
+    var locV = r.found?r.loc:''; if(dv.loc) locV += ' ⚠内置:' + dv.loc;
+    var remV = r.remark; if(dv.rem) remV += ' ⚠内置:' + dv.rem;
+    aoa.push([i+1, r.ip, r.name, dirV, locV, remV, r.note||'']);
+  });
   var ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:6},{wch:20},{wch:40},{wch:10},{wch:35},{wch:30}];
+  ws['!cols'] = [{wch:6},{wch:20},{wch:40},{wch:10},{wch:35},{wch:30},{wch:30}];
   var merges = [], rIdx = 1;
   s3LocGroups(rows).forEach(function(g){
     if(g.key!==''){
@@ -1518,10 +1733,13 @@ function s3DetailSheet(rows){
     for(var k=0;k<g.n;k++) fills.push(col);
   });
   var R = aoa.length, r, c;
-  for(c=0;c<6;c++) setCellS(ws, XLSX.utils.encode_cell({r:0,c:c}), S3_HDR_S);
-  for(r=1;r<R;r++) for(c=0;c<6;c++){
+  for(c=0;c<7;c++) setCellS(ws, XLSX.utils.encode_cell({r:0,c:c}), S3_HDR_S);
+  for(r=1;r<R;r++) for(c=0;c<7;c++){
+    var ro = rows[r-1]||{}, dv = {}; (ro.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
+    var isDiff = (c===3&&dv.dir)||(c===4&&dv.loc)||(c===5&&dv.rem);
     setCellS(ws, XLSX.utils.encode_cell({r:r,c:c}), {
-      fill:{fgColor:{rgb:fills[r-1]||'F0F5FF'}}, font:{name:'微软雅黑', sz:10},
+      fill:{fgColor:{rgb:isDiff?'FFF2CC':(fills[r-1]||'F0F5FF')}},
+      font:isDiff?{name:'微软雅黑', sz:10, bold:true, color:{rgb:'C00000'}}:{name:'微软雅黑', sz:10},
       alignment:{horizontal:(c===3?'center':'left'), vertical:'center'}, border:S3_BORDER
     });
   }
