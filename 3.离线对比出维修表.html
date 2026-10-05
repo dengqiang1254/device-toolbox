@@ -193,7 +193,7 @@ table.results tr.not-found td.loc { color: #999; font-style: italic; }
       <button class="clear-btn" id="origClear" title="清除">&times;</button>
     </div>
     <div class="help-text">
-      内置数据库已预加载原表数据。如需更换原表，请上传新的Excel文件（Col2=地点, Col3=方向, Col5=IP, Col8=备注）。
+      内置数据库已预加载原表数据。如需更换原表，请上传新的 Excel 文件：<br>支持两种格式——<b>分类工具导出</b>（按表头自动识别 IP地址 / 方向 / 所属路口 / 备注），以及<b>路口安装统计总表</b>（第2列=地点, 第3列=方向, 第5列=IP, 第8列=备注）。
     </div>
   </div>
 
@@ -262,6 +262,7 @@ const PINYIN_MAP = {"华美路三和路": "huameilusanhelu", "华美路临莘路
 
 // ==================== 全局状态 ====================
 let ipDatabase = null;  // {ip: {location, remark, direction, old_ip}}
+let lastOrigCols = null;  // 原表列位识别结果（用于界面提示）
 let offlineWorkbook = null;
 let offlineFileName = "";
 let currentResults = null;  // {sheetName: {data_rows, stats, locCounts}}
@@ -306,6 +307,66 @@ function cmpLocKeyDesc(a, b) {
   return 0;
 }
 
+// ==================== 原表列位自动识别 ====================
+// 兼容两种格式：
+//   A. 路口安装统计总表        —— 第2列=地点, 第3列=方向, 第5列=IP, 第8列=备注
+//   B. 设备在线离线分类工具导出 —— A序号 B在线/离线 C IP地址 D设备名称 E方向 F所属路口 G原表备注 H备注 ...
+// 识别不到表头时返回固定列位，行为与旧版完全一致。
+function detectOrigCols(data) {
+  var FIXED = { headerRow: 0, loc: 1, dir: 2, ip: 4, rem: 7, rems: [7], dev: -1, auto: false };
+  function norm(v) {
+    return String(v === null || v === undefined ? "" : v).replace(/[\s\u3000]+/g, "");
+  }
+  var scan = Math.min(5, data.length);
+  var best = null;
+  for (var row = 0; row < scan; row++) {
+    var arr = data[row] || [];
+    var c = { row: row, loc: -1, locStrong: -1, dir: -1, ip: -1, rems: [], remExact: -1, dev: -1, hits: 0 };
+    for (var col = 0; col < arr.length; col++) {
+      var s = norm(arr[col]);
+      if (!s) continue;
+      var sl = s.toLowerCase();
+      // IP 列：表头单元格本身叫 IP / IP地址（限长，避免误中“IP摄像机xxx”这类设备名）
+      if (c.ip === -1 && sl.indexOf("ip") === 0 && sl.length <= 8) { c.ip = col; c.hits++; continue; }
+      if (c.dir === -1 && s.indexOf("方向") !== -1) { c.dir = col; c.hits++; continue; }
+      if (c.locStrong === -1 && s.indexOf("所属路口") !== -1) { c.locStrong = col; c.hits++; continue; }
+      if (c.loc === -1 && (s.indexOf("地点") !== -1 || s.indexOf("路口") !== -1)) { c.loc = col; c.hits++; continue; }
+      if (s.indexOf("备注") !== -1) {
+        if (s === "备注" && c.remExact === -1) c.remExact = col;
+        if (c.rems.indexOf(col) === -1) c.rems.push(col);
+        c.hits++;
+        continue;
+      }
+      if (c.dev === -1 && (s.indexOf("设备名称") !== -1 || s.indexOf("设备名") !== -1)) { c.dev = col; c.hits++; continue; }
+    }
+    if (!best || c.hits > best.hits) best = c;
+  }
+  if (!best || best.ip === -1 || best.hits < 3) return FIXED;
+  var rems = [];
+  if (best.remExact !== -1) rems.push(best.remExact);
+  for (var i = 0; i < best.rems.length; i++) {
+    if (rems.indexOf(best.rems[i]) === -1) rems.push(best.rems[i]);
+  }
+  if (!rems.length) rems.push(FIXED.rem);
+  return {
+    headerRow: best.row,
+    loc: best.locStrong !== -1 ? best.locStrong : (best.loc !== -1 ? best.loc : FIXED.loc),
+    dir: best.dir !== -1 ? best.dir : FIXED.dir,
+    ip: best.ip,
+    rem: rems[0],
+    rems: rems,
+    dev: best.dev,
+    auto: true
+  };
+}
+
+// 列号 -> Excel 列字母（0 -> A）
+function colLetter(idx) {
+  var n = idx + 1, s = "";
+  while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
 // ==================== 构建IP数据库 ====================
 function buildIPDatabase(workbook) {
   const sheetName = workbook.SheetNames[0];
@@ -313,6 +374,9 @@ function buildIPDatabase(workbook) {
   const data = XLSX.utils.sheet_to_json(ws, {header: 1, raw: true, defval: ""});
   
   let ipDb = {};
+
+  // 原表列位（固定列位 or 表头自动识别）
+  const COLS = detectOrigCols(data);
   
   function ensure(ip) {
     if (!ipDb[ip]) {
@@ -329,7 +393,7 @@ function buildIPDatabase(workbook) {
   // round A: 严格 “设备名称/设备名”
   for (let row = 0; row < Math.min(5, data.length) && devCol === -1; row++) {
     for (let col = 0; col < (data[row] || []).length; col++) {
-      if (col === 4) continue;
+      if (col === COLS.ip) continue;
       const v = data[row][col];
       if (v === null || v === undefined) continue;
       const s = String(v).trim();
@@ -339,7 +403,7 @@ function buildIPDatabase(workbook) {
   // round B: 严格 “摄像头类型/设备类型/机型/型号/终端名称”
   for (let row = 0; row < Math.min(5, data.length) && devCol === -1; row++) {
     for (let col = 0; col < (data[row] || []).length; col++) {
-      if (col === 4) continue;
+      if (col === COLS.ip) continue;
       const v = data[row][col];
       if (v === null || v === undefined) continue;
       const s = String(v).trim();
@@ -349,7 +413,7 @@ function buildIPDatabase(workbook) {
   // round C: 含 “设备/摄像头/终端”，排除“组织/路口/通道/网点/项目/所属/安装”修饰
   for (let row = 0; row < Math.min(5, data.length) && devCol === -1; row++) {
     for (let col = 0; col < (data[row] || []).length; col++) {
-      if (col === 4) continue;
+      if (col === COLS.ip) continue;
       const v = data[row][col];
       if (v === null || v === undefined) continue;
       const s = String(v).trim();
@@ -365,7 +429,7 @@ function buildIPDatabase(workbook) {
   if (devCol === -1) {
     for (let row = 0; row < Math.min(5, data.length); row++) {
       for (let col = 0; col < (data[row] || []).length; col++) {
-        if (col === 4) continue;
+        if (col === COLS.ip) continue;
         const v = data[row][col];
         if (v === null || v === undefined) continue;
         const s = String(v).trim();
@@ -375,17 +439,20 @@ function buildIPDatabase(workbook) {
     }
   }
 
-  // 从第2行开始（跳过表头）
-  for (let row = 1; row < data.length; row++) {
+  // 表头识别出的设备名称列优先
+  if (COLS.dev !== -1) devCol = COLS.dev;
+
+  // 跳过表头行（表头行位置由 detectOrigCols 识别）
+  for (let row = COLS.headerRow + 1; row < data.length; row++) {
     const row_data = data[row];
     if (!row_data || row_data.length === 0) continue;
     
-    // Col 2 = 地点 (index 1)
-    const locVal = row_data[1];
+    // 地点列（固定第2列 / 表头识别）
+    const locVal = row_data[COLS.loc];
     const location = (locVal !== null && locVal !== undefined) ? String(locVal).trim() : "";
 
-    // Col 3 = 方向 (index 2)
-    const dirVal = row_data[2];
+    // 方向列（固定第3列 / 表头识别）
+    const dirVal = row_data[COLS.dir];
     const direction = (dirVal !== null && dirVal !== undefined) ? String(dirVal).trim() : "";
 
     // 设备名称(列位置由表头自动检测)
@@ -395,15 +462,19 @@ function buildIPDatabase(workbook) {
       if (dv !== null && dv !== undefined) devName = String(dv).trim();
     }
     
-    // Col 5 = IP地址 (index 4)
-    const ipVal = row_data[4];
+    // IP列（固定第5列 / 表头识别）
+    const ipVal = row_data[COLS.ip];
     if (ipVal === null || ipVal === undefined) continue;
     const ips = extractIPs(ipVal);
     if (ips.length === 0) continue;
     
-    // Col 8 = 备注 (index 7)
-    const remarkVal = row_data[7];
-    const remarkText = (remarkVal !== null && remarkVal !== undefined) ? String(remarkVal).trim() : "";
+    // 备注列（固定第8列 / 表头识别；多个备注列取第一个非空）
+    let remarkText = "";
+    for (let ri = 0; ri < COLS.rems.length; ri++) {
+      const rv = row_data[COLS.rems[ri]];
+      const rt = (rv !== null && rv !== undefined) ? String(rv).trim() : "";
+      if (rt) { remarkText = rt; break; }
+    }
     
     for (const ip of ips) {
       const entry = ensure(ip);
@@ -464,6 +535,7 @@ function buildIPDatabase(workbook) {
     }
   }
   
+  lastOrigCols = COLS;
   return ipDb;
 }
 
@@ -1059,7 +1131,10 @@ function handleOrigFile(file) {
       document.getElementById("origFileName").textContent = file.name;
       document.getElementById("origFileCount").textContent = "(" + count + " 个IP)";
       document.getElementById("dbStatus").className = "db-status built";
-      document.getElementById("dbStatus").textContent = "已加载数据库（" + count + " 个IP）";
+      const colHint = (lastOrigCols && lastOrigCols.auto)
+        ? "，自动识别列位：" + colLetter(lastOrigCols.ip) + "列=IP / " + colLetter(lastOrigCols.dir) + "列=方向 / " + colLetter(lastOrigCols.loc) + "列=路口"
+        : "，按默认列位：B列=地点 / C列=方向 / E列=IP / H列=备注";
+      document.getElementById("dbStatus").textContent = "已加载数据库（" + count + " 个IP）" + colHint;
       
       hideProgress();
       checkMatchReady();
