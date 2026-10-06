@@ -1575,14 +1575,10 @@ document.getElementById('s3Run').addEventListener('click', function(){
       else { var alt = oldMap[x.ip]; if(alt && EMBEDDED_IP_DB[alt]){ rec = EMBEDDED_IP_DB[alt]; via='原IP回溯'; src='embed'; } }
     }
     if(rec){
-      /* 自定义库该IP路口/方向为空时，用内置库补空（只补空，不覆盖自定义已有值） */
-      if(src==='custom' && (!rec.location || !rec.direction)){
-        var eFill = EMBEDDED_IP_DB[x.ip];
-        if(eFill && (eFill.location || eFill.direction)){
-          rec = { location: rec.location || eFill.location || '', direction: rec.direction || eFill.direction || '',
-                  remark: rec.remark || '', note: rec.note || '', dev: rec.dev || eFill.dev || '', old_ip: rec.old_ip || '' };
-          backfilled++;
-        }
+      /* 自定义库该IP路口/方向为空时不再回填到原列，内置库的值只显示在最后的「内置数据」列 */
+      if(src==='custom' && (!rec.location || !rec.direction) && EMBEDDED_IP_DB[x.ip]
+         && (EMBEDDED_IP_DB[x.ip].location || EMBEDDED_IP_DB[x.ip].direction)){
+        backfilled++;
       }
       matched++;
       var remark = rec.remark||''; if(remark) hasRemark++;
@@ -1650,7 +1646,7 @@ document.getElementById('s3Run').addEventListener('click', function(){
     s3RenderSummary(document.getElementById('s3SumTbl'), S3.offRows);
   }
   document.getElementById('s3Export').disabled = S3.ips.length===0;
-  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB&&diffCount?(' / 与内置库不同 '+diffCount):'') + (backfilled?(' / 内置库补空 '+backfilled):''));
+  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB&&diffCount?(' / 与内置库不同 '+diffCount):'') + (backfilled?(' / 末列内置数据 '+backfilled):''));
 });
 /* ===== 步骤3 输出结构（与参考 Excel「对比差异结果」一致）===== */
 /* 按路口→方向分组（行已按路口/方向排序），返回 [{key:路口, n:总数, dirs:[{dir, rows}]}]；未匹配 key='' */
