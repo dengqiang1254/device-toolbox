@@ -423,7 +423,7 @@
           <div class="tbl-wrap s3grp"><table id="s3SumTbl"></table></div>
         </div>
       </div>
-      <div class="note">默认使用内置安装位置数据库（约 2 万条，与板块三相同）按 IP 匹配；IP 有变更记录的会自动按原 IP 回溯匹配。也可在下面载入自定义安装位置表（如分类工具导出的全量数据）替代内置库——与内置库内容不同的字段会标黄提醒，内置库的值显示在最后「内置数据」列。</div>
+      <div class="note">默认使用内置安装位置数据库（约 2 万条，与板块三相同）按 IP 匹配；IP 有变更记录的会自动按原 IP 回溯匹配。也可在下面载入自定义安装位置表（如分类工具导出的全量数据）替代内置库；载入后只按该文件匹配，不再掺用内置数据，未匹配到的原样保留。</div>
       <div class="btns" id="s3DbBar">
         <label class="btn ghost" for="s3DbFile" style="cursor:pointer">📁 载入自定义安装位置表</label>
         <input type="file" id="s3DbFile" accept=".xlsx,.xls,.csv" style="display:none">
@@ -1558,7 +1558,7 @@ document.getElementById('s3Run').addEventListener('click', function(){
   var oldMap = {}, oldMapC = {};
   Object.keys(EMBEDDED_IP_DB).forEach(function(ip){ var o = EMBEDDED_IP_DB[ip].old_ip; if(o){ var oo = normIP(o); if(oo && !oldMap[oo]) oldMap[oo] = ip; } });
   if(CDB) Object.keys(CDB).forEach(function(ip){ var o = CDB[ip].old_ip; if(o){ var oo = normIP(o); if(oo && !oldMapC[oo]) oldMapC[oo] = ip; } });
-  var rows = [], matched=0, notFound=0, hasRemark=0, diffCount=0, backfilled=0, byLoc = {}, nOff=0, nFix=0;
+  var rows = [], matched=0, notFound=0, hasRemark=0, byLoc = {}, nOff=0, nFix=0;
   var coll = new Intl.Collator('zh-Hans-CN');
   function cmpV(a,b){ return String(a==null?'':a).trim() !== String(b==null?'':b).trim(); }
   S3.ips.forEach(function(x){
@@ -1568,35 +1568,19 @@ document.getElementById('s3Run').addEventListener('click', function(){
       rec = CDB[x.ip];
       if(rec){ src='custom'; }
       else { var altC = oldMapC[x.ip]; if(altC && CDB[altC]){ rec = CDB[altC]; via='原IP回溯'; src='custom'; } }
-      if(!rec){ var eFb = EMBEDDED_IP_DB[x.ip]; if(eFb){ rec = eFb; src='embed'; } }
     } else {
       rec = EMBEDDED_IP_DB[x.ip];
       if(rec){ src='embed'; }
       else { var alt = oldMap[x.ip]; if(alt && EMBEDDED_IP_DB[alt]){ rec = EMBEDDED_IP_DB[alt]; via='原IP回溯'; src='embed'; } }
     }
     if(rec){
-      /* 自定义库该IP路口/方向为空时不再回填到原列，内置库的值只显示在最后的「内置数据」列 */
-      if(src==='custom' && (!rec.location || !rec.direction) && EMBEDDED_IP_DB[x.ip]
-         && (EMBEDDED_IP_DB[x.ip].location || EMBEDDED_IP_DB[x.ip].direction)){
-        backfilled++;
-      }
       matched++;
       var remark = rec.remark||''; if(remark) hasRemark++;
       var name = rec.dev || x.name || '';
       var note = rec.note || '';
-      var diffs = [];
-      if(src==='custom'){
-        var e0 = EMBEDDED_IP_DB[x.ip];
-        if(e0){
-          if(cmpV(rec.location, e0.location)) diffs.push(['loc', rec.location||'', e0.location||'']);
-          if(cmpV(rec.direction, e0.direction)) diffs.push(['dir', rec.direction||'', e0.direction||'']);
-          if(cmpV(rec.remark, e0.remark)) diffs.push(['rem', rec.remark||'', e0.remark||'']);
-        }
-        if(diffs.length) diffCount++;
-      }
-      rows.push({ip:x.ip, name:name, st:x.st||'离线', loc:rec.location||'', dir:rec.direction||'', remark:remark+(via?'（'+via+'）':''), note:note, found:true, diffs:diffs});
+      rows.push({ip:x.ip, name:name, st:x.st||'离线', loc:rec.location||'', dir:rec.direction||'', remark:remark+(via?'（'+via+'）':''), note:note, found:true});
       var b = byLoc[rec.location||'（未知）'] = byLoc[rec.location||'（未知）'] || {n:0, list:[]}; b.n++; b.list.push(rows[rows.length-1]);
-    } else { notFound++; rows.push({ip:x.ip, name:x.name||'', st:x.st||'离线', loc:'', dir:'', remark:'', note:'', found:false, diffs:[]}); }
+    } else { notFound++; rows.push({ip:x.ip, name:x.name||'', st:x.st||'离线', loc:'', dir:'', remark:'', note:'', found:false}); }
   });
   /* 方向按「东西南北」顺序 */
   var DIR_ORDER = ['东','西','南','北'];
@@ -1633,7 +1617,6 @@ document.getElementById('s3Run').addEventListener('click', function(){
     '<div class="stat on"><div class="v">'+matched+'</div><div class="l">匹配成功</div></div>' +
     '<div class="stat"><div class="v">'+notFound+'</div><div class="l">未找到</div></div>' +
     '<div class="stat blue"><div class="v">'+hasRemark+'</div><div class="l">有备注提醒</div></div>' +
-    '<div class="stat orange"><div class="v">'+diffCount+'</div><div class="l">与内置库不同</div></div>' +
     '<div class="stat blue"><div class="v">'+locs.length+'</div><div class="l">涉及路口/地点</div></div>';
   document.getElementById('s3FixSec').style.display = S3.fixRows.length ? 'block' : 'none';
   document.getElementById('s3OffSec').style.display = S3.offRows.length ? 'block' : 'none';
@@ -1646,7 +1629,7 @@ document.getElementById('s3Run').addEventListener('click', function(){
     s3RenderSummary(document.getElementById('s3SumTbl'), S3.offRows);
   }
   document.getElementById('s3Export').disabled = S3.ips.length===0;
-  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB&&diffCount?(' / 与内置库不同 '+diffCount):'') + (backfilled?(' / 末列内置数据 '+backfilled):''));
+  toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB?'（匹配库：自定义文件）':'（匹配库：内置）'));
 });
 /* ===== 步骤3 输出结构（与参考 Excel「对比差异结果」一致）===== */
 /* 按路口→方向分组（行已按路口/方向排序），返回 [{key:路口, n:总数, dirs:[{dir, rows}]}]；未匹配 key='' */
@@ -1672,20 +1655,9 @@ function s3SumList(rows){
   return list;
 }
 /* 屏幕明细表：序号/IP地址/设备名称/方向/所属路口/原表备注/备注，方向与所属路口按组合并（rowspan） */
-function s3BuiltinText(r){
-  var dv = {}; (r.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
-  var parts = [];
-  if(dv.loc) parts.push(dv.loc);
-  if(dv.dir) parts.push(dv.dir);
-  if(dv.rem) parts.push(dv.rem);
-  return parts.join('｜');
-}
-function s3DiffTd(r, key, val){
-  return esc(val);
-}
 function s3RenderDetail(tbl, rows){
   var groups = s3LocGroups(rows);
-  var h = '<tr><th>序号</th><th>IP地址</th><th>设备名称</th><th>方向</th><th>所属路口</th><th>原表备注</th><th>备注</th><th>内置数据</th></tr>';
+  var h = '<tr><th>序号</th><th>IP地址</th><th>设备名称</th><th>方向</th><th>所属路口</th><th>原表备注</th><th>备注</th></tr>';
   var idx = 0, gi = 0;
   groups.forEach(function(g){
     /* 分组交替：第1组浅蓝、第2组白色…；未匹配组黄色（与参考 Excel 一致） */
@@ -1694,13 +1666,13 @@ function s3RenderDetail(tbl, rows){
       d.rows.forEach(function(r, ri){
         h += '<tr'+(gcls?' class="'+gcls+'"':'')+'><td>'+(++idx)+'</td><td class="ip">'+esc(r.ip)+'</td><td>'+esc(r.name)+'</td>';
         if(g.key===''){ h += '<td></td>'; }
-        else if(d.rows.length>1){ h += (ri===0 ? '<td class="dir" rowspan="'+d.rows.length+'">'+s3DiffTd(r,'dir',r.dir)+'</td>' : ''); }
-        else { h += '<td class="dir">'+s3DiffTd(r,'dir',r.dir)+'</td>'; }
+        else if(d.rows.length>1){ h += (ri===0 ? '<td class="dir" rowspan="'+d.rows.length+'">'+esc(r.dir)+'</td>' : ''); }
+        else { h += '<td class="dir">'+esc(r.dir)+'</td>'; }
         if(g.key===''){ h += '<td class="cell-fail">未匹配</td>'; }
-        else if(g.n>1){ h += (di===0 && ri===0 ? '<td class="loc" rowspan="'+g.n+'">'+s3DiffTd(r,'loc',g.key)+'</td>' : ''); }
-        else { h += '<td class="loc">'+s3DiffTd(r,'loc',g.key)+'</td>'; }
-        h += '<td'+((r.diffs&&r.diffs.some(function(d){return d[0]==='rem';}))?' class="cell-diff"':'')+'>'+s3DiffTd(r,'rem',r.remark)+'</td>';
-        h += '<td>'+esc(r.note||'')+'</td><td class="builtin">'+esc(s3BuiltinText(r))+'</td></tr>';
+        else if(g.n>1){ h += (di===0 && ri===0 ? '<td class="loc" rowspan="'+g.n+'">'+esc(g.key)+'</td>' : ''); }
+        else { h += '<td class="loc">'+esc(g.key)+'</td>'; }
+        h += '<td>'+esc(r.remark)+'</td>';
+        h += '<td>'+esc(r.note||'')+'</td></tr>';
       });
     });
   });
@@ -1717,16 +1689,15 @@ function s3RenderSummary(tbl, rows){
 var S3_BORDER = { left:{style:'thin'}, right:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} };
 var S3_HDR_S = { fill:{fgColor:{rgb:'2F5496'}}, font:{name:'微软雅黑', bold:true, color:{rgb:'FFFFFF'}, sz:11}, alignment:{horizontal:'center', vertical:'center'} };
 function s3DetailSheet(rows){
-  var aoa = [['序号','IP地址','设备名称','方向','所属路口','原表备注','备注','内置数据']];
+  var aoa = [['序号','IP地址','设备名称','方向','所属路口','原表备注','备注']];
   rows.forEach(function(r, i){
-    var dv = {}; (r.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
     var dirV = r.found?r.dir:'';
     var locV = r.found?r.loc:'';
     var remV = r.remark;
-    aoa.push([i+1, r.ip, r.name, dirV, locV, remV, r.note||'', s3BuiltinText(r)]);
+    aoa.push([i+1, r.ip, r.name, dirV, locV, remV, r.note||'']);
   });
   var ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:6},{wch:20},{wch:40},{wch:10},{wch:35},{wch:30},{wch:30},{wch:36}];
+  ws['!cols'] = [{wch:6},{wch:20},{wch:40},{wch:10},{wch:35},{wch:30},{wch:30}];
   var merges = [], rIdx = 1;
   s3LocGroups(rows).forEach(function(g){
     if(g.key!==''){
@@ -1745,13 +1716,11 @@ function s3DetailSheet(rows){
     for(var k=0;k<g.n;k++) fills.push(col);
   });
   var R = aoa.length, r, c;
-  for(c=0;c<8;c++) setCellS(ws, XLSX.utils.encode_cell({r:0,c:c}), S3_HDR_S);
-  for(r=1;r<R;r++) for(c=0;c<8;c++){
-    var ro = rows[r-1]||{}, dv = {}; (ro.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
-    var isDiff = (c===3&&dv.dir)||(c===4&&dv.loc)||(c===5&&dv.rem)||(c===7&&(dv.dir||dv.loc||dv.rem));
+  for(c=0;c<7;c++) setCellS(ws, XLSX.utils.encode_cell({r:0,c:c}), S3_HDR_S);
+  for(r=1;r<R;r++) for(c=0;c<7;c++){
     setCellS(ws, XLSX.utils.encode_cell({r:r,c:c}), {
-      fill:{fgColor:{rgb:isDiff?'FFF2CC':(fills[r-1]||'F0F5FF')}},
-      font:isDiff?{name:'微软雅黑', sz:10, bold:true, color:{rgb:'C00000'}}:{name:'微软雅黑', sz:10},
+      fill:{fgColor:{rgb:(fills[r-1]||'F0F5FF')}},
+      font:{name:'微软雅黑', sz:10},
       alignment:{horizontal:(c===3?'center':'left'), vertical:'center'}, border:S3_BORDER
     });
   }

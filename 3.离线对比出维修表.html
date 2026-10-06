@@ -679,7 +679,7 @@ function readOfflineFile(workbook, sheetName) {
 // ==================== 准备结果（匹配+排序） ====================
 function prepareResults(results, ipDb) {
   let dataRows = [];
-  let stats = {total: 0, found: 0, not_found: 0, has_remark: 0, builtin_only: 0};
+  let stats = {total: 0, found: 0, not_found: 0, has_remark: 0};
   
   for (const item of results) {
     const info = ipDb[item.ip];
@@ -688,11 +688,6 @@ function prepareResults(results, ipDb) {
     const note = (info && info.note) ? info.note : "";
     const direction = (info && info.direction) ? info.direction : "";
     const devOrig = (info && info.dev) ? info.dev : "";
-    // 原表该IP无路口时不再回填到原列，内置库的数据只显示在最后的「内置数据」列
-    if (ipDb !== EMBEDDED_IP_DB && !location) {
-      const fb0 = EMBEDDED_IP_DB[item.ip];
-      if (fb0 && (fb0.location || fb0.direction || fb0.remark)) stats.builtin_only++;
-    }
     const devOffline = item.dev || "";
     // 原表设备名称优先;两边都有且不同则合并展示
     let dev = "";
@@ -709,17 +704,6 @@ function prepareResults(results, ipDb) {
     if (found) stats.found++; else stats.not_found++;
     if (remark) stats.has_remark++;
     
-    // 内置库数据（H列）：该IP在内置EMBEDDED_IP_DB中的 路口|方向|原表备注
-    const bi = EMBEDDED_IP_DB[item.ip];
-    let builtin = "";
-    if (bi) {
-      const parts = [];
-      if (bi.location) parts.push(bi.location);
-      if (bi.direction) parts.push(bi.direction);
-      if (bi.remark) parts.push(bi.remark);
-      builtin = parts.join("｜");
-    }
-
     dataRows.push({
       ip: item.ip,
       dev: dev,
@@ -727,7 +711,6 @@ function prepareResults(results, ipDb) {
       dir: direction,
       remark: remark,
       note: note,
-      builtin: builtin,
       found: found,
       has_remark: !!remark
     });
@@ -759,7 +742,7 @@ function renderDetailTable(dataRows) {
   const table = document.getElementById("detailTable");
   
   // 表头
-  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注", "内置数据"];
+  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注"];
   let html = "<thead><tr>";
   for (const h of headers) {
     html += "<th>" + h + "</th>";
@@ -839,7 +822,6 @@ function renderDetailTable(dataRows) {
     
     html += '<td>' + escapeHtml(r.remark) + '</td>';
     html += '<td>' + escapeHtml(r.note || "") + '</td>';
-    html += '<td>' + escapeHtml(r.builtin || "") + '</td>';
     html += '</tr>';
   }
   
@@ -868,9 +850,7 @@ function renderSummaryTable(dataRows, locCounts) {
     idx++;
   }
   if (notFoundCount > 0) {
-    const nfBuiltin = dataRows.filter(r => !r.loc && r.builtin).length;
-    const nfLabel = "(未匹配)" + (nfBuiltin ? "（" + nfBuiltin + " 行见末列内置数据）" : "");
-    html += '<tr class="not-found"><td style="text-align:center">' + idx + '</td><td>' + nfLabel + '</td><td style="text-align:center">' + notFoundCount + '</td></tr>';
+    html += '<tr class="not-found"><td style="text-align:center">' + idx + '</td><td>(未匹配)</td><td style="text-align:center">' + notFoundCount + '</td></tr>';
   }
   html += '</tbody>';
   table.innerHTML = html;
@@ -923,8 +903,8 @@ async function exportExcel() {
 
   // 表头
   const hRow = ws.getRow(1);
-  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注", "内置数据"];
-  for (let c = 1; c <= 8; c++) {
+  const headers = ["序号", "IP地址", "设备名称", "方向", "所属路口", "原表备注", "备注"];
+  for (let c = 1; c <= 7; c++) {
     const cell = hRow.getCell(c);
     cell.value = headers[c - 1];
     cell.font = headerFont;
@@ -961,9 +941,9 @@ async function exportExcel() {
     else if (r.has_remark) fill = noteFill;
     else fill = groupToggle ? groupFillA : groupFillB;
 
-    const vals = [i + 1, r.ip, r.dev, r.dir, r.loc, r.remark, r.note || "", r.builtin || ""];
+    const vals = [i + 1, r.ip, r.dev, r.dir, r.loc, r.remark, r.note || ""];
     const row = ws.getRow(idx);
-    for (let c = 1; c <= 8; c++) {
+    for (let c = 1; c <= 7; c++) {
       const cell = row.getCell(c);
       const v = vals[c - 1];
       cell.value = (v === "" || v === undefined || v === null) ? null : v;
@@ -984,7 +964,7 @@ async function exportExcel() {
   }
 
   // 列宽
-  const detailWidths = [6, 20, 40, 10, 35, 30, 30, 30];
+  const detailWidths = [6, 20, 40, 10, 35, 30, 30];
   detailWidths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 
   // ===== 汇总子表（多子表时以子表名+汇总命名） =====
