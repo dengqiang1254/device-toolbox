@@ -423,7 +423,7 @@
           <div class="tbl-wrap s3grp"><table id="s3SumTbl"></table></div>
         </div>
       </div>
-      <div class="note">默认使用内置安装位置数据库（约 2 万条，与板块三相同）按 IP 匹配；IP 有变更记录的会自动按原 IP 回溯匹配。也可在下面载入自定义安装位置表（如分类工具导出的全量数据）替代内置库——与内置库内容不同的字段会同时显示两者并标黄提醒。</div>
+      <div class="note">默认使用内置安装位置数据库（约 2 万条，与板块三相同）按 IP 匹配；IP 有变更记录的会自动按原 IP 回溯匹配。也可在下面载入自定义安装位置表（如分类工具导出的全量数据）替代内置库——与内置库内容不同的字段会标黄提醒，内置库的值显示在最后「内置数据」列。</div>
       <div class="btns" id="s3DbBar">
         <label class="btn ghost" for="s3DbFile" style="cursor:pointer">📁 载入自定义安装位置表</label>
         <input type="file" id="s3DbFile" accept=".xlsx,.xls,.csv" style="display:none">
@@ -1676,13 +1676,20 @@ function s3SumList(rows){
   return list;
 }
 /* 屏幕明细表：序号/IP地址/设备名称/方向/所属路口/原表备注/备注，方向与所属路口按组合并（rowspan） */
+function s3BuiltinText(r){
+  var dv = {}; (r.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
+  var parts = [];
+  if(dv.loc) parts.push(dv.loc);
+  if(dv.dir) parts.push(dv.dir);
+  if(dv.rem) parts.push(dv.rem);
+  return parts.join('｜');
+}
 function s3DiffTd(r, key, val){
-  if(r.diffs){ for(var k=0;k<r.diffs.length;k++){ if(r.diffs[k][0]===key) return esc(val)+' <span class="diff-tag">⚠内置:'+esc(r.diffs[k][2])+'</span>'; } }
   return esc(val);
 }
 function s3RenderDetail(tbl, rows){
   var groups = s3LocGroups(rows);
-  var h = '<tr><th>序号</th><th>IP地址</th><th>设备名称</th><th>方向</th><th>所属路口</th><th>原表备注</th><th>备注</th></tr>';
+  var h = '<tr><th>序号</th><th>IP地址</th><th>设备名称</th><th>方向</th><th>所属路口</th><th>原表备注</th><th>备注</th><th>内置数据</th></tr>';
   var idx = 0, gi = 0;
   groups.forEach(function(g){
     /* 分组交替：第1组浅蓝、第2组白色…；未匹配组黄色（与参考 Excel 一致） */
@@ -1697,7 +1704,7 @@ function s3RenderDetail(tbl, rows){
         else if(g.n>1){ h += (di===0 && ri===0 ? '<td class="loc" rowspan="'+g.n+'">'+s3DiffTd(r,'loc',g.key)+'</td>' : ''); }
         else { h += '<td class="loc">'+s3DiffTd(r,'loc',g.key)+'</td>'; }
         h += '<td'+((r.diffs&&r.diffs.some(function(d){return d[0]==='rem';}))?' class="cell-diff"':'')+'>'+s3DiffTd(r,'rem',r.remark)+'</td>';
-        h += '<td>'+esc(r.note||'')+'</td></tr>';
+        h += '<td>'+esc(r.note||'')+'</td><td class="builtin">'+esc(s3BuiltinText(r))+'</td></tr>';
       });
     });
   });
@@ -1714,16 +1721,16 @@ function s3RenderSummary(tbl, rows){
 var S3_BORDER = { left:{style:'thin'}, right:{style:'thin'}, top:{style:'thin'}, bottom:{style:'thin'} };
 var S3_HDR_S = { fill:{fgColor:{rgb:'2F5496'}}, font:{name:'微软雅黑', bold:true, color:{rgb:'FFFFFF'}, sz:11}, alignment:{horizontal:'center', vertical:'center'} };
 function s3DetailSheet(rows){
-  var aoa = [['序号','IP地址','设备名称','方向','所属路口','原表备注','备注']];
+  var aoa = [['序号','IP地址','设备名称','方向','所属路口','原表备注','备注','内置数据']];
   rows.forEach(function(r, i){
     var dv = {}; (r.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
-    var dirV = r.found?r.dir:''; if(dv.dir) dirV += ' ⚠内置:' + dv.dir;
-    var locV = r.found?r.loc:''; if(dv.loc) locV += ' ⚠内置:' + dv.loc;
-    var remV = r.remark; if(dv.rem) remV += ' ⚠内置:' + dv.rem;
-    aoa.push([i+1, r.ip, r.name, dirV, locV, remV, r.note||'']);
+    var dirV = r.found?r.dir:'';
+    var locV = r.found?r.loc:'';
+    var remV = r.remark;
+    aoa.push([i+1, r.ip, r.name, dirV, locV, remV, r.note||'', s3BuiltinText(r)]);
   });
   var ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:6},{wch:20},{wch:40},{wch:10},{wch:35},{wch:30},{wch:30}];
+  ws['!cols'] = [{wch:6},{wch:20},{wch:40},{wch:10},{wch:35},{wch:30},{wch:30},{wch:36}];
   var merges = [], rIdx = 1;
   s3LocGroups(rows).forEach(function(g){
     if(g.key!==''){
@@ -1742,10 +1749,10 @@ function s3DetailSheet(rows){
     for(var k=0;k<g.n;k++) fills.push(col);
   });
   var R = aoa.length, r, c;
-  for(c=0;c<7;c++) setCellS(ws, XLSX.utils.encode_cell({r:0,c:c}), S3_HDR_S);
-  for(r=1;r<R;r++) for(c=0;c<7;c++){
+  for(c=0;c<8;c++) setCellS(ws, XLSX.utils.encode_cell({r:0,c:c}), S3_HDR_S);
+  for(r=1;r<R;r++) for(c=0;c<8;c++){
     var ro = rows[r-1]||{}, dv = {}; (ro.diffs||[]).forEach(function(d){ dv[d[0]] = d[2]; });
-    var isDiff = (c===3&&dv.dir)||(c===4&&dv.loc)||(c===5&&dv.rem);
+    var isDiff = (c===3&&dv.dir)||(c===4&&dv.loc)||(c===5&&dv.rem)||(c===7&&(dv.dir||dv.loc||dv.rem));
     setCellS(ws, XLSX.utils.encode_cell({r:r,c:c}), {
       fill:{fgColor:{rgb:isDiff?'FFF2CC':(fills[r-1]||'F0F5FF')}},
       font:isDiff?{name:'微软雅黑', sz:10, bold:true, color:{rgb:'C00000'}}:{name:'微软雅黑', sz:10},
