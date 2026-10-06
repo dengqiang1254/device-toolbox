@@ -1622,11 +1622,11 @@ document.getElementById('s3Run').addEventListener('click', function(){
   document.getElementById('s3OffSec').style.display = S3.offRows.length ? 'block' : 'none';
   if(S3.fixRows.length){
     s3RenderDetail(document.getElementById('s3FixTbl'), S3.fixRows);
-    s3RenderSummary(document.getElementById('s3FixSumTbl'), S3.fixRows);
+    s3RenderSummary(document.getElementById('s3FixSumTbl'), S3.fixRows, '新修复IP数量');
   }
   if(S3.offRows.length){
     s3RenderDetail(document.getElementById('s3Tbl'), S3.offRows);
-    s3RenderSummary(document.getElementById('s3SumTbl'), S3.offRows);
+    s3RenderSummary(document.getElementById('s3SumTbl'), S3.offRows, '新离线IP数量');
   }
   document.getElementById('s3Export').disabled = S3.ips.length===0;
   toast('✅ 维修表已生成：匹配 '+matched+' / 未找到 '+notFound + (CDB?'（匹配库：自定义文件）':'（匹配库：内置）'));
@@ -1678,10 +1678,10 @@ function s3RenderDetail(tbl, rows){
   });
   tbl.innerHTML = h || '<tr><td style="color:#8aa093">（无数据）</td></tr>';
 }
-/* 屏幕汇总表：序号/所属路口/离线IP数量（按数量降序，未匹配在末尾） */
-function s3RenderSummary(tbl, rows){
+/* 屏幕汇总表：序号/所属路口/数量列（按数量降序，未匹配在末尾） */
+function s3RenderSummary(tbl, rows, cntLabel){
   var list = s3SumList(rows);
-  var h = '<tr><th>序号</th><th>所属路口</th><th>离线IP数量</th></tr>';
+  var h = '<tr><th>序号</th><th>所属路口</th><th>'+cntLabel+'</th></tr>';
   list.forEach(function(x, i){ h += '<tr'+(String(x[0]).indexOf('未匹配')>=0?' class="gU"':'')+'><td>'+(i+1)+'</td><td class="loc">'+esc(x[0])+'</td><td class="num">'+x[1]+'</td></tr>'; });
   tbl.innerHTML = h || '<tr><td style="color:#8aa093">（无数据）</td></tr>';
 }
@@ -1727,9 +1727,9 @@ function s3DetailSheet(rows){
   return ws;
 }
 /* 导出：汇总表（样式与参考 Excel 一致） */
-function s3SummarySheet(rows){
+function s3SummarySheet(rows, cntLabel){
   var list = s3SumList(rows);
-  var aoa = [['序号','所属路口','离线IP数量']];
+  var aoa = [['序号','所属路口',cntLabel]];
   list.forEach(function(x, i){ aoa.push([i+1, x[0], x[1]]); });
   var ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:6},{wch:40},{wch:15}];
@@ -1773,12 +1773,12 @@ document.getElementById('s3Export').addEventListener('click', function(){
   var parts = [];
   if(S3.fixRows && S3.fixRows.length){
     XLSX.utils.book_append_sheet(wb, s3DetailSheet(S3.fixRows), '新修复');
-    XLSX.utils.book_append_sheet(wb, s3SummarySheet(S3.fixRows), '新修复汇总');
+    XLSX.utils.book_append_sheet(wb, s3SummarySheet(S3.fixRows, '新修复IP数量'), '新修复汇总');
     parts.push('新修复');
   }
   if(S3.offRows && S3.offRows.length){
     XLSX.utils.book_append_sheet(wb, s3DetailSheet(S3.offRows), '新离线');
-    XLSX.utils.book_append_sheet(wb, s3SummarySheet(S3.offRows), '新离线汇总');
+    XLSX.utils.book_append_sheet(wb, s3SummarySheet(S3.offRows, '新离线IP数量'), '新离线汇总');
     parts.push('新离线');
   }
   var fname = '维修表_'+parts.join('_')+'_'+ts()+'.xlsx';
