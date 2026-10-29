@@ -727,7 +727,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       } }
     return ws;
   }
-  function buildRepairBook(s3, nameParts){
+  function buildRepairBook(s3, nameParts, sum){
     var wb = XLSX.utils.book_new();
     if(s3.fixRows && s3.fixRows.length){
       XLSX.utils.book_append_sheet(wb, s3DetailSheet(s3.fixRows), '新修复');
@@ -736,6 +736,23 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if(s3.offRows && s3.offRows.length){
       XLSX.utils.book_append_sheet(wb, s3DetailSheet(s3.offRows), '新离线');
       XLSX.utils.book_append_sheet(wb, s3SummarySheet(s3.offRows, '新离线IP数量'), '新离线汇总');
+    }
+    if(!wb.SheetNames.length){
+      /* 新修复 / 新离线均为 0：给出对比摘要子表，避免空 workbook 写出报错 */
+      sum = sum || {};
+      var rows = [
+        ['项目','数值'],
+        ['对比运营商', sum.carrier || ''],
+        ['原离线台数', sum.totalL != null ? sum.totalL : ''],
+        ['新离线台数', sum.totalR != null ? sum.totalR : ''],
+        ['共同离线', sum.common != null ? sum.common : ''],
+        ['新修复', 0],
+        ['新离线', 0],
+        ['结论', '本次对比无新修复、无新离线设备，无需维修']
+      ];
+      var ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [{wch:16},{wch:46}];
+      XLSX.utils.book_append_sheet(wb, ws, '对比摘要');
     }
     return freezeFirstRow(wb).then(function(u8){ return {data:u8, parts:nameParts}; });
   }
@@ -824,7 +841,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 desc:'新修复 ' + res.leftOnly.length + ' / 新离线 ' + res.rightOnly.length + ' / 对比摘要'});
     await LG('   ✓ ③ ' + files[2].name);
 
-    var r4 = await buildRepairBook(s3, parts);
+    var r4 = await buildRepairBook(s3, parts, {carrier:carrier, totalL:res.totalL, totalR:res.totalR, common:res.common});
     files.push({key:'repair', name: '维修表_' + parts.join('_') + '_' + t + '.xlsx', data:r4.data,
                 desc:'新修复 ' + s3.fixRows.length + ' / 新离线 ' + s3.offRows.length + '（含路口汇总）'});
     await LG('   ✓ ④ ' + files[3].name);
