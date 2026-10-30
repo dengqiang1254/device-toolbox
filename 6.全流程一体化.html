@@ -238,26 +238,35 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var n = String(fileName||'');
     if(/^维修表_/.test(n)) return {kind:'repair', name:n};
     if(/^对比差异结果_/.test(n)) return {kind:'diff', name:n};
-    if(/_离线名单_/.test(n)) return {kind:'offline', name:n};
     var names = [];
     if(book && book.sheets){ for(var i=0;i<book.sheets.length;i++) names.push(book.sheets[i].name); }
-    var hasSummary = names.indexOf('在线率统计')>=0, hasSrc = names.indexOf('源数据')>=0;
-    if(/_分运营商在线状态_/.test(n) || (hasSummary && hasSrc)) return {kind:'full', name:n};
+    function has(x){ return names.indexOf(x)>=0; }
+    function startWith(x){ for(var i=0;i<names.length;i++){ if(names[i].indexOf(x)===0) return true; } return false; }
+    /* 按子表特征识别（不依赖文件名，防止改名后误判） */
+    if(has('新修复')||has('新修复汇总')||has('新离线')||has('新离线汇总')||has('对比摘要')) return {kind:'repair', name:n};
+    if(startWith('离线名单(')) return {kind:'offline', name:n};
+    var hasCarrier = false;
+    for(var k=0;k<names.length;k++){ if(/^(电信|移动|联通|广电)(在线|离线)$/.test(names[k])){ hasCarrier = true; break; } }
+    if(/_分运营商在线状态_/.test(n) || has('在线率统计') || hasCarrier) return {kind:'full', name:n};
     return null;
   }
 
-  /* 选分析用的子表：「分运营商在线状态」等结果文件优先用其「源数据」子表（原始数据 38 列全在） */
+  /* 选分析用的子表：结果文件按「源数据」→「原表」顺序取（两者都含完整设备清单）。
+     若只有各运营商在线/离线子表则无法还原全量数据，返回 null 交给调用方报错 */
   function pickAnalysisSheet(book){
     if(book && book.sheets){
-      for(var i=0;i<book.sheets.length;i++){
-        var s = book.sheets[i];
-        if(s.name === '源数据' && s.ipC >= 0) return s;
+      var pref = ['源数据','原表'];
+      for(var p=0;p<pref.length;p++){
+        for(var i=0;i<book.sheets.length;i++){
+          var s = book.sheets[i];
+          if(s.name === pref[p] && s.ipC >= 0) return s;
+        }
       }
     }
     return bestSheet(book);
   }
 
-  var OK_INPUT = '可用输入：① 原始汇总文件（设备数据汇总信息_*.xlsx）；② 本工具导出的「分运营商在线状态」文件（会自动取其「源数据」子表）';
+  var OK_INPUT = '可用输入：① 原始汇总文件（设备数据汇总信息_*.xlsx）；② 本工具导出的「分运营商在线状态」文件（会自动取其「源数据」或「原表」子表）';
 
   /* ============ 步骤1：设备数据 → 分类 + 离线名单 ============ */
   function step1Analyze(aoa, carrier){
@@ -809,8 +818,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var knNew = detectResultKind(bNew.fileName, bNew);
     if(knNew && knNew.kind !== 'full')
       throw new Error('「最新文件」选成了流程产生的结果文件（' + knNew.name + '），无法从中还原设备数据。' + OK_INPUT);
-    if(knNew && knNew.kind === 'full')
-      await LG('   ↳ 识别为「分运营商在线状态」结果文件，自动使用其「源数据」子表');
+    if(knNew && knNew.kind === 'full'){
+      var shNew = pickAnalysisSheet(bNew);
+      if(shNew.name !== '源数据' && shNew.name !== '原表')
+        throw new Error('「最新文件」是「分运营商在线状态」结果文件，但里面没有「源数据」或「原表」子表（可能被删过），无法还原完整设备清单。' + OK_INPUT);
+      await LG('   ↳ 识别为结果文件，自动使用其「' + shNew.name + '」子表');
+    }
 
     await LG('② 读取「旧文件」…');
     var bOld = readBook(opts.oldBuf, opts.oldName||'旧文件');
@@ -818,8 +831,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var knOld = detectResultKind(bOld.fileName, bOld);
     if(knOld && knOld.kind !== 'full')
       throw new Error('「旧文件」选成了流程产生的结果文件（' + knOld.name + '），无法从中还原设备数据。' + OK_INPUT);
-    if(knOld && knOld.kind === 'full')
-      await LG('   ↳ 识别为「分运营商在线状态」结果文件，自动使用其「源数据」子表');
+    if(knOld && knOld.kind === 'full'){
+      var shOld = pickAnalysisSheet(bOld);
+      if(shOld.name !== '源数据' && shOld.name !== '原表')
+        throw new Error('「旧文件」是「分运营商在线状态」结果文件，但里面没有「源数据」或「原表」子表（可能被删过），无法还原完整设备清单。' + OK_INPUT);
+      await LG('   ↳ 识别为结果文件，自动使用其「' + shOld.name + '」子表');
+    }
 
     await LG('③ 步骤1：解析新文件 → 分运营商在线状态 + ' + carrier + '离线名单');
     var stNew = step1Analyze(pickAnalysisSheet(bNew).aoa, carrier);
