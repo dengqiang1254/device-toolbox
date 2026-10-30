@@ -96,13 +96,13 @@
     <div class="grid3">
       <div class="slot" id="slotNew">
         <div class="t">📈 最新文件<span class="tag">必填</span></div>
-        <div class="d">今天导出的设备数据汇总</div>
+        <div class="d">今天导出的设备数据汇总（原始文件，勿用维修表等结果文件）</div>
         <div class="f" id="nmNew"></div>
         <div class="hint">点击选择，或拖到此处</div>
       </div>
       <div class="slot" id="slotOld">
         <div class="t">📉 旧文件<span class="tag">必填</span></div>
-        <div class="d">昨天（上一次）的同格式文件</div>
+        <div class="d">昨天（上一次）的原始汇总文件（形如 设备数据汇总信息_*.xlsx，<b>不能</b>用维修表/对比结果）</div>
         <div class="f" id="nmOld"></div>
         <div class="hint">点击选择，或拖到此处</div>
       </div>
@@ -230,6 +230,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return {fileName:fileName, sheets:sheets, best:best>=0?best:0};
   }
   function bestSheet(book){ return book.sheets[book.best]; }
+
+  /* 识别工具自己导出的结果文件（维修表/对比差异结果/分运营商在线状态/离线名单），
+     这类文件不能当「最新/旧文件」输入，给出明确报错而不是笼统的"未找到设备IP列" */
+  function detectResultFile(fileName, book){
+    var n = String(fileName||'');
+    if(/^(维修表|对比差异结果)_/.test(n)) return n;
+    if(/_(分运营商在线状态|离线名单)_/.test(n)) return n;
+    if(book && book.sheets){
+      var resultSheets = ['新修复汇总','新离线汇总','对比摘要','在线率统计','源数据'];
+      for(var i=0;i<book.sheets.length;i++){
+        if(resultSheets.indexOf(book.sheets[i].name)>=0) return n + '（含子表「' + book.sheets[i].name + '」）';
+      }
+    }
+    return null;
+  }
 
   /* ============ 步骤1：设备数据 → 分类 + 离线名单 ============ */
   function step1Analyze(aoa, carrier){
@@ -774,9 +789,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     await LG('① 读取「最新文件」…');
     var bNew = readBook(opts.newBuf, opts.newName||'新文件');
     await LG('   ✓ ' + bNew.fileName + '（' + bNew.sheets.length + ' 个子表）');
+    var rfNew = detectResultFile(bNew.fileName, bNew);
+    if(rfNew) throw new Error('「最新文件」选成了工具导出的结果文件（' + rfNew + '）。请选择今天的原始汇总文件，文件名形如「设备数据汇总信息_*.xlsx」');
+
     await LG('② 读取「旧文件」…');
     var bOld = readBook(opts.oldBuf, opts.oldName||'旧文件');
     await LG('   ✓ ' + bOld.fileName + '（' + bOld.sheets.length + ' 个子表）');
+    var rfOld = detectResultFile(bOld.fileName, bOld);
+    if(rfOld) throw new Error('「旧文件」选成了工具导出的结果文件（' + rfOld + '，如昨天跑出来的维修表）。请改选昨天的原始汇总文件，文件名形如「设备数据汇总信息_*.xlsx」');
 
     await LG('③ 步骤1：解析新文件 → 分运营商在线状态 + ' + carrier + '离线名单');
     var stNew = step1Analyze(bestSheet(bNew).aoa, carrier);
@@ -864,7 +884,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   return {
     ip2int:ip2int, normIP:normIP, isOnline:isOnline, isStatusOn:isStatusOn, esc:esc, ts:ts,
     carrierOf:carrierOf, SEGMENTS:SEGMENTS, safeName:safeName,
-    readBook:readBook, bestSheet:bestSheet, step1Analyze:step1Analyze,
+    readBook:readBook, bestSheet:bestSheet, step1Analyze:step1Analyze, detectResultFile:detectResultFile,
     step2Compare:step2Compare, s3dbBuild:s3dbBuild, step3Match:step3Match,
     s3LocGroups:s3LocGroups, s3SumList:s3SumList,
     buildFullBook:buildFullBook, buildOfflineBook:buildOfflineBook,
