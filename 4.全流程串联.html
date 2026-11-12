@@ -269,8 +269,8 @@
     </div>
     <div class="step-body">
       <label class="drop" id="s1Drop">
-        <input type="file" id="s1File" accept=".xlsx,.xls">
-        📊 点击或拖入<b>设备数据 Excel</b>（需含「设备IP」「设备名称」「通道状态」列）
+        <input type="file" id="s1File" accept=".xlsx,.xls,.zip" multiple>
+        📊 点击或拖入<b>设备数据 Excel</b>（需含「设备IP」「设备名称」「通道状态」列）；新版导出 DeviceDataInformation_*_0/_1 拆多份时按住 Ctrl 一次全选，自动按行拼接；导出成 zip 压缩包时直接选 zip 即可，自动解包拼接
       </label>
       <div class="sheet-pick" id="s1Pick" style="display:none">
         <label>📑 子表：</label>
@@ -283,8 +283,17 @@
         <span class="cm"><label>附加列</label><select id="s1Extra"></select></span>
         <span class="cf-info">设备IP/设备名称/通道状态按表头固定匹配；可选列默认不使用，选中后带入离线名单与导出 Excel</span>
       </div>
+      <div class="carrier-filter" id="s1DedupRow" style="display:none">
+        <span class="cf-label">📐 统计口径：</span>
+        <span class="cm"><select id="dedupMode">
+          <option value="device" selected>按设备去重（一台设备算 1 台）</option>
+          <option value="all">全部通道（按行，多通道算多台）</option>
+        </select></span>
+        <span class="cf-info">同一设备IP的多个通道（全景 / 结构化等）合并为 1 台，任一通道在线即算设备在线；切换后自动重算</span>
+      </div>
       <div id="s1Stat" style="display:none">
         <div class="stats" id="s1Stats"></div>
+      <div id="s1DedupNote" style="margin:8px 0 4px;font-size:12.5px;color:#5b6b7c"></div>
         <div class="result-title">📊 在线率统计（分运营商汇总 · 与导出 Excel 一致）</div>
         <div class="sum-wrap"><table id="s1SumTbl"></table></div>
         <div class="carrier-filter" id="s1FilterRow" style="display:none">
@@ -517,11 +526,13 @@ function buildSumAoa(){
   st.push(['未分配（段外IP）','—', F.otherRows.length, F.otherOn, F.otherRows.length-F.otherOn, pct(F.otherRows.length, F.otherOn)]);
   st.push(['未分配（无IP通道）','—', F.norecRows.length, F.norecOn, F.norecRows.length-F.norecOn, pct(F.norecRows.length, F.norecOn)]);
   st.push(['总计（有IP设备）','—', F.recRows.length, F.recOn, F.recRows.length-F.recOn, pct(F.recRows.length, F.recOn)]);
+  var _md = S1.mode || {};
+  st.push(['统计口径', (_md.label||'') + '：通道行 ' + (_md.chanRows||0) + ' 行 → 计入 ' + (_md.total||F.recRows.length) + (_md.byDevice?' 台':' 条通道'), '', '', '', '']);
   return st;
 }
 function renderSumTbl(tbl, aoa){
   var h='';
-  aoa.forEach(function(r,ri){ var isT=ri===aoa.length-1; h+='<tr'+(isT?' class="total"':'')+'>'; r.forEach(function(c,ci){ if(ri===0){ h+='<th>'+esc(c)+'</th>'; } else if(ci===r.length-1){ var v=parseFloat(c), rc=isNaN(v)?'':(v>=60?'rate-good':(v>=50?'rate-mid':'rate-bad')); h+='<td class="rate '+rc+'">'+esc(c)+'</td>'; } else { h+='<td>'+esc(c)+'</td>'; } }); h+='</tr>'; });
+  aoa.forEach(function(r,ri){ var lbl=String(r[0]==null?'':r[0]); if(lbl==='统计口径'){ h+='<tr><td colspan="6" style="text-align:left;color:#5b6b7c;font-size:12px">'+esc(lbl)+'：'+esc(String(r[1]==null?'':r[1]))+'</td></tr>'; return; } var isT=lbl.indexOf('总计')===0; h+='<tr'+(isT?' class="total"':'')+'>'; r.forEach(function(c,ci){ if(ri===0){ h+='<th>'+esc(c)+'</th>'; } else if(ci===r.length-1){ var v=parseFloat(c), rc=isNaN(v)?'':(v>=60?'rate-good':(v>=50?'rate-mid':'rate-bad')); h+='<td class="rate '+rc+'">'+esc(c)+'</td>'; } else { h+='<td>'+esc(c)+'</td>'; } }); h+='</tr>'; });
   tbl.innerHTML=h;
 }
 function exportBook(sheets, fname){
@@ -541,7 +552,7 @@ function styleSheet(ws,aoa,type,opts){
   ws['!rows']=[{hpt:24}];
   if(type==='summary'){ ws['!cols']=[{wch:20},{wch:50},{wch:10},{wch:10},{wch:10},{wch:10}]; var tot=R-1; for(r=1;r<R;r++){ var isT=r===tot; for(c=0;c<C;c++){ v=aoa[r][c]; if(c===1) s={alignment:{horizontal:'left',vertical:'center'}}; else if(c===C-1) s=rateStyle(v); else s={alignment:{horizontal:'center',vertical:'center'}}; if(isT){ s.font=Object.assign({bold:true},s.font||{}); s.border={top:{style:'thin',color:{rgb:'808080'}}}; } setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),s); } } }
   else if(type==='detail'){ var stC=opts.statusCol!=null?opts.statusCol:2; var cols=[]; for(c=0;c<C;c++){ cols.push(c===0?{wch:18}:(c===1?{wch:40}:(c===stC?{wch:12}:{wch:14}))); } ws['!cols']=cols; for(r=1;r<R;r++){ for(c=0;c<C;c++){ v=aoa[r][c]; s=(c===stC)?stStyle(v):{fill:{fgColor:{rgb:((r-1)%2===0?'F0F5FF':'FFFFFF')}},alignment:{horizontal:'left',vertical:'center'}}; setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),s); } } }
-  else if(type==='source'){ var head=aoa[0]||[],sc=-1; for(c=0;c<head.length;c++){ if(String(head[c]||'')==='通道状态'){ sc=c; break; } } var cols2=[]; for(c=0;c<C;c++){ cols2.push(c===0?{wch:15}:(c===sc?{wch:10}:{wch:13})); } ws['!cols']=cols2; for(r=1;r<R;r++){ for(c=0;c<C;c++){ if(sc>=0&&c===sc) setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),stStyle(aoa[r][sc])); else if((r-1)%2===0) setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),{fill:{fgColor:{rgb:'F0F5FF'}}}); } } }
+  else if(type==='source'){ var head=aoa[0]||[],sc=-1; for(c=0;c<head.length;c++){ if((function(s){ s=String(s||'').replace(/^\*+/,''); return s==='通道状态'||s==='通道在离线状态'; })(head[c])){ sc=c; break; } } var cols2=[]; for(c=0;c<C;c++){ cols2.push(c===0?{wch:15}:(c===sc?{wch:10}:{wch:13})); } ws['!cols']=cols2; for(r=1;r<R;r++){ for(c=0;c<C;c++){ if(sc>=0&&c===sc) setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),stStyle(aoa[r][sc])); else if((r-1)%2===0) setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),{fill:{fgColor:{rgb:'F0F5FF'}}}); } } }
   else if(type==='repair'){ var hasSt=String((aoa[0]||[])[2])==='状态'; var locC=hasSt?3:2; var wArr=hasSt?[{wch:18},{wch:36},{wch:10},{wch:22},{wch:10},{wch:24}]:[{wch:18},{wch:36},{wch:22},{wch:10},{wch:24}]; var cols3=[]; for(c=0;c<C;c++){ cols3.push(wArr[c]||{wch:14}); } ws['!cols']=cols3; for(r=1;r<R;r++){ for(c=0;c<C;c++){ v=aoa[r][c]; s={alignment:{horizontal:'left',vertical:'center'}}; if(hasSt&&c===2){ s=stStyle(v); } else if(c===locC&&String(v).indexOf('未匹配')>=0){ s={fill:{fgColor:{rgb:'FFC7CE'}},font:{color:{rgb:'9C0006'},bold:true},alignment:{horizontal:'left',vertical:'center'}}; } setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),s); } } }
   else { var cols4=[]; for(c=0;c<C;c++){ cols4.push(c===0?{wch:18}:(c===1?{wch:40}:{wch:14})); } ws['!cols']=cols4; if(opts.alt!==false){ for(r=1;r<R;r++){ if((r-1)%2===0){ for(c=0;c<C;c++){ setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),{fill:{fgColor:{rgb:'F0F5FF'}}}); } } } } }
 }
@@ -563,7 +574,7 @@ function s1ApplyFilter(){
   S1.filter = checked ? checked.value : '全部';
   S1.filtered = S1.filter==='全部' ? S1.offline.slice() : S1.offline.filter(function(r){ return r[2]===S1.filter; });
   renderTbl(document.getElementById('s1Tbl'), ['设备IP','设备名称','运营商'].concat(S1.extHeads||[]), S1.filtered);
-  document.getElementById('s1FilterInfo').textContent = '当前显示 ' + S1.filtered.length + ' / ' + S1.offline.length + ' 台离线';
+  document.getElementById('s1FilterInfo').textContent = '当前显示 ' + S1.filtered.length + ' / ' + S1.offline.length + ' ' + ((S1.mode&&S1.mode.byDevice===false)?'条通道':'台') + '离线';
   var empty = S1.filtered.length===0;
   document.getElementById('s1Pass').disabled = empty;
   document.getElementById('s1Export').disabled = empty;
@@ -585,6 +596,143 @@ function s1BuildMap(head){
     sel.innerHTML = html;
     if(!sel._bound){ sel._bound = true; sel.addEventListener('change', function(){ s1Analyze(); }); }
   });
+  var dm = document.getElementById('dedupMode');
+  if(dm && !dm._bound){ dm._bound = true; dm.addEventListener('change', function(){ s1Analyze(); }); }
+}
+/* ===== zip 压缩包支持（平台导出可能打包成 zip，内含 _0/_1 等多份 xlsx）=====
+   原生实现：读 zip 中央目录 → 解出 .xlsx/.xls → 交给既有「多文件拼接」逻辑；不引入第三方库 */
+function zipReadEntries(u8){
+  var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  var i = u8.length - 22, min = Math.max(0, u8.length - 22 - 65536);
+  while(i >= min){ if(dv.getUint32(i, true) === 0x06054b50) break; i--; }
+  if(i < min) throw new Error('不是有效的 zip 压缩包');
+  var count = dv.getUint16(i+10, true), cdOff = dv.getUint32(i+16, true);
+  var entries = [], p = cdOff;
+  for(var k=0;k<count;k++){
+    if(dv.getUint32(p, true) !== 0x02014b50) throw new Error('zip 中央目录损坏');
+    var flags = dv.getUint16(p+8, true), method = dv.getUint16(p+10, true);
+    var csize = dv.getUint32(p+20, true), usize = dv.getUint32(p+24, true);
+    var nlen = dv.getUint16(p+28, true), elen = dv.getUint16(p+30, true), clen = dv.getUint16(p+32, true);
+    var lho = dv.getUint32(p+42, true);
+    var raw = u8.subarray(p+46, p+46+nlen), name = '';
+    try{ name = new TextDecoder((flags & 0x800) ? 'utf-8' : 'gbk').decode(raw); }
+    catch(e){ for(var q=0;q<raw.length;q++) name += String.fromCharCode(raw[q]); }
+    entries.push({name:name, method:method, csize:csize, usize:usize, lho:lho});
+    p += 46 + nlen + elen + clen;
+  }
+  return entries;
+}
+function zipEntrySlice(u8, en){
+  var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), p = en.lho;
+  if(dv.getUint32(p, true) !== 0x04034b50) throw new Error('zip 本地头损坏：'+en.name);
+  var nlen = dv.getUint16(p+26, true), elen = dv.getUint16(p+28, true);
+  var s = p + 30 + nlen + elen;
+  return u8.subarray(s, s + en.csize);
+}
+function zipInflateRaw(comp){
+  if(typeof DecompressionStream === 'undefined' || typeof Response === 'undefined')
+    return Promise.reject(new Error('当前环境不支持 zip 解压（缺少 DecompressionStream）'));
+  try{
+    var stream = new Response(comp).body.pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).arrayBuffer().then(function(ab){ return new Uint8Array(ab); });
+  }catch(e){ return Promise.reject(e); }
+}
+function zipUnzip(file){
+  var readAb = (typeof file.arrayBuffer === 'function')
+    ? file.arrayBuffer()
+    : new Promise(function(res, rej){
+        var fr = new FileReader();
+        fr.onload = function(e){ res(e.target.result); };
+        fr.onerror = function(){ rej(new Error('读取 '+file.name+' 失败')); };
+        fr.readAsArrayBuffer(file);
+      });
+  return readAb.then(function(ab){
+    var u8 = new Uint8Array(ab);
+    if(u8.length < 4 || u8[0] !== 0x50 || u8[1] !== 0x4B) throw new Error(file.name + ' 不是有效的 zip 压缩包');
+    var entries = zipReadEntries(u8), xlsx = [], skipped = [];
+    entries.forEach(function(en){
+      if(/\/$/.test(en.name) || en.name.indexOf('__MACOSX/') === 0 || en.name.charAt(0) === '.') return;
+      if(!/\.(xlsx|xls)$/i.test(en.name)){ skipped.push(en.name); return; }
+      xlsx.push(en);
+    });
+    if(!xlsx.length) throw new Error('压缩包 '+file.name+' 里没有 .xlsx/.xls 文件' + (skipped.length ? '（已忽略：'+skipped.join('、')+'）' : ''));
+    return Promise.all(xlsx.map(function(en){
+      var data = (en.method === 0) ? Promise.resolve(zipEntrySlice(u8, en))
+        : (en.method === 8) ? zipInflateRaw(zipEntrySlice(u8, en))
+        : Promise.reject(new Error('不支持的压缩方式（method '+en.method+'）：'+en.name));
+      return data.then(function(d){
+        if(en.usize && d.length !== en.usize) throw new Error('解压大小不符：'+en.name);
+        return new File([d], en.name);
+      });
+    })).then(function(files){
+      return { zipName: file.name, files: files, skipped: skipped };
+    });
+  });
+}
+function zipExpandFiles(list){
+  var fl = Array.prototype.slice.call(list || []).filter(function(f){ return f && f.name; });
+  var zips = fl.filter(function(f){ return /\.zip$/i.test(String(f.name)); });
+  if(!zips.length) return Promise.resolve({ files: fl, notes: [] });
+  var rest = fl.filter(function(f){ return !/\.zip$/i.test(String(f.name)); });
+  return Promise.all(zips.map(zipUnzip)).then(function(rs){
+    var files = rest.slice(), notes = [];
+    rs.forEach(function(r){
+      files = files.concat(r.files);
+      notes.push(r.zipName + ' → ' + r.files.length + ' 个表格' + (r.skipped.length ? '（忽略 ' + r.skipped.length + ' 个非表格文件）' : ''));
+    });
+    return { files: files, notes: notes };
+  });
+}
+/* 多文件导入：新版导出拆分多份（DeviceDataInformation_*_0/_1），表头一致按行拼接 + 整行去重；zip 压缩包自动解包 */
+function s1HandleFiles(files){
+  zipExpandFiles(files).then(function(rz){
+    if(rz.notes.length) toast('📦 已自动解压：'+rz.notes.join('；'));
+    var fl = rz.files;
+    if(!fl.length) return;
+    if(fl.length===1){ s1Handle(fl[0]); return; }
+    var done = 0, books = [], failed = [];
+    fl.forEach(function(f){
+      s2ReadBook(f, function(book, err){
+        if(err || !book || !book.sheets.length){ failed.push(f.name); }
+        else { books.push(book); }
+        done++;
+        if(done === fl.length){
+          if(!books.length){ toast('❌ 全部文件读取失败'+(failed.length?('：'+failed.join('、')):'')); return; }
+          if(failed.length) toast('⚠️ 部分文件读取失败：'+failed.join('、'));
+          s1MergeBooks(books);
+        }
+      });
+    });
+  }).catch(function(err){ toast('❌ '+err.message); });
+}
+function s1MergeBooks(books){
+  var parts = [], logs = [], hdr = null;
+  books.forEach(function(b){
+    var sh = b.sheets[b.best!=null ? b.best : 0];
+    if(!sh || !sh.aoa.length) return;
+    var h = (sh.aoa[0]||[]).map(function(v){ return String(v==null?'':v).trim(); });
+    if(hdr === null){ hdr = h; parts.push(sh.aoa); }
+    else{
+      var same = h.length===hdr.length && h.every(function(c,i){ return c === hdr[i]; });
+      if(!same){ toast('❌ 各文件表头不一致，无法拼接：'+b.fileName); return; }
+      parts.push(sh.aoa);
+    }
+    logs.push('   ✓ '+b.fileName+'（'+(sh.aoa.length-1)+' 行）');
+  });
+  if(!parts.length){ toast('❌ 没有可合并的数据'); return; }
+  var merged = parts[0].slice();
+  for(var i=1;i<parts.length;i++) merged = merged.concat(parts[i].slice(1));
+  var seen = {}, out = [merged[0]], dropped = 0;
+  for(var k=1;k<merged.length;k++){
+    var key = merged[k].join('\u0001');
+    if(seen[key]){ dropped++; continue; }
+    seen[key]=1; out.push(merged[k]);
+  }
+  var book = {fileName:'合并'+parts.length+'个文件', sheets:[{name:'合并('+parts.length+'个文件)', aoa:out}], best:0};
+  S1.book = book;
+  buildSheetPick(book, 's1Pick', 's1Sheet', s1ApplySheet);
+  s1ApplySheet();
+  toast('已合并 '+parts.length+' 个文件'+(dropped?('，去掉整行重复 '+dropped+' 行'):'')+'：\n'+logs.join('\n'));
 }
 function s1Handle(file){
   s2ReadBook(file, function(book, err){
@@ -605,12 +753,13 @@ function s1ApplySheet(){
   S1.srcName = book.fileName.replace(/\.[^.]+$/, '');
   S1.cols = {
     ipC: ipC,
-    nmC: findCol(head, function(h){ return h === '设备名称'; }),
-    stC: findCol(head, function(h){ return h === '通道状态'; }),
+    nmC: findCol(head, function(h){ return h.replace(/\*/g, '') === '设备名称'; }),
+    stC: findCol(head, function(h){ var c = h.replace(/\*/g, ''); return c === '通道状态' || c === '通道在离线状态'; }),
     chC: findCol(head, function(h){ return h.indexOf('通道名称')>=0; })
   };
   s1BuildMap(head);
   document.getElementById('s1ColRow').style.display = 'flex';
+  var _dr = document.getElementById('s1DedupRow'); if(_dr) _dr.style.display = 'flex';
   s1Analyze();
 }
 function s1Analyze(){
@@ -628,40 +777,83 @@ function s1Analyze(){
   S1.exts = exts;
   S1.extHeads = exts.map(function(e){ return e.h; });
   var getExt = function(r){ return exts.map(function(e){ return String(r[e.c]==null?'':r[e.c]).trim(); }); };
-  var total=0, on=0, off=0, rows=[];
-  var byCarrier = {};
-  /* 分运营商在线状态导出用：完整分类数据 */
-  var full = { recRows:[], otherRows:[], norecRows:[], carrOn:{}, carrOff:{},
-               recOn:0, otherOn:0, norecOn:0 };
+  /* 统计口径：device=按设备去重（默认，同IP多通道合并、任一在线即在线）／all=全部通道按行 */
+  var modeEl = document.getElementById('dedupMode');
+  var byDevice = !(modeEl && modeEl.value === 'all');
+  var modeLabel = byDevice ? '按设备(IP)去重' : '全部通道(按行)';
+  /* 第一遍：逐行解析成记录（有IP / 无IP 分开） */
+  var recs = [], norec = [];
   for(var i=1;i<aoa.length;i++){
     var r = aoa[i]; if(!r || !r.length) continue;
     var ipRaw = String(r[ipC]==null?'':r[ipC]).trim();
     var ip = normIP(ipRaw);
     var name = nmC>=0 ? String(r[nmC]||'').trim() : '';
-    var stTxt = stC>=0 ? (isOnline(r[stC])?'在线':'离线') : '离线';
-    var online = stTxt==='在线';
+    var online = stC>=0 ? isOnline(r[stC]) : false;
+    var stTxt = online ? '在线' : '离线';
+    var fb = chC>=0 ? String(r[chC]==null?'':r[chC]).trim() : '';
     if(!ip){
       /* 无IP通道：名称为空时用通道名称兜底，整行为空则跳过 */
-      var fb = chC>=0 ? String(r[chC]==null?'':r[chC]).trim() : '';
       if(!ipRaw && !name && !fb && (stC<0 || String(r[stC]==null?'':r[stC]).trim()==='')) continue;
-      full.norecRows.push([ipRaw||'（无IP）', name||fb||'（未命名）', stTxt].concat(getExt(r)));
-      if(online) full.norecOn++;
+      norec.push({ ipRaw:ipRaw||'（无IP）', name:name||fb||'（未命名）', stTxt:stTxt, online:online, ext:getExt(r) });
       continue;
     }
-    var c = carrierOf(ip);
-    total++; online ? on++ : off++;
-    var base = [ip, name, stTxt].concat(getExt(r));
-    if(c==='未分配'){ full.otherRows.push(base); if(online) full.otherOn++; }
+    recs.push({ ip:ip, name:name, chName:fb, online:online, stTxt:stTxt, carrier:carrierOf(ip), ext:getExt(r) });
+  }
+  /* 第二遍：按口径合并 */
+  var chanRows = recs.length, multiChan = 0, mixedChan = 0, devices = recs;
+  if(byDevice){
+    var order = [], idx = {};
+    recs.forEach(function(x){
+      var m = idx[x.ip];
+      if(!m){
+        m = idx[x.ip] = { ip:x.ip, name:x.name, onN:x.online?1:0, offN:x.online?0:1, online:x.online,
+                          n:1, carrier:x.carrier, chans:[], ext:x.ext.slice() };
+        order.push(m);
+      } else {
+        m.n++;
+        if(!m.name && x.name) m.name = x.name;
+        if(x.online){ m.onN++; m.online = true; } else { m.offN++; }
+      }
+      if(x.chName && m.chans.indexOf(x.chName)<0) m.chans.push(x.chName);
+      exts.forEach(function(e, ei){
+        var v = String(x.ext[ei]==null?'':x.ext[ei]).trim();
+        if(!v) return;
+        if(e.c === chC){ if(m.chans.indexOf(v)<0) m.chans.push(v); }
+        else if(!String(m.ext[ei]==null?'':m.ext[ei]).trim()) m.ext[ei] = v;
+      });
+    });
+    devices = order;
+    devices.forEach(function(m){
+      m.stTxt = m.online ? '在线' : '离线';
+      if(m.n > 1){ multiChan++; if(m.onN>0 && m.offN>0) mixedChan++; }
+      exts.forEach(function(e, ei){ if(e.c === chC) m.ext[ei] = m.chans.join(' / '); });
+    });
+  }
+  var total=0, on=0, off=0, rows=[];
+  var byCarrier = {};
+  /* 分运营商在线状态导出用：完整分类数据 */
+  var full = { recRows:[], otherRows:[], norecRows:[], carrOn:{}, carrOff:{},
+               recOn:0, otherOn:0, norecOn:0 };
+  norec.forEach(function(x){
+    full.norecRows.push([x.ipRaw, x.name, x.stTxt].concat(x.ext));
+    if(x.online) full.norecOn++;
+  });
+  devices.forEach(function(m){
+    total++; m.online ? on++ : off++;
+    var base = [m.ip, m.name, m.stTxt].concat(m.ext);
+    if(m.carrier==='未分配'){ full.otherRows.push(base); if(m.online) full.otherOn++; }
     else {
-      var b = byCarrier[c] = byCarrier[c] || {t:0,o:0}; b.t++; if(!online) b.o++;
-      if(online){ (full.carrOn[c] = full.carrOn[c] || []).push(base); }
-      else { (full.carrOff[c] = full.carrOff[c] || []).push(base); }
+      var b = byCarrier[m.carrier] = byCarrier[m.carrier] || {t:0,o:0}; b.t++; if(!m.online) b.o++;
+      if(m.online){ (full.carrOn[m.carrier] = full.carrOn[m.carrier] || []).push(base); }
+      else { (full.carrOff[m.carrier] = full.carrOff[m.carrier] || []).push(base); }
     }
     full.recRows.push(base);
-    if(online) full.recOn++;
-    if(!online) rows.push([ip, name, c].concat(getExt(r)));
-  }
+    if(m.online) full.recOn++;
+    if(!m.online) rows.push([m.ip, m.name, m.carrier].concat(m.ext));
+  });
   S1.offline = rows; S1.full = full;
+  S1.mode = { byDevice:byDevice, label:modeLabel, chanRows:chanRows, multiChan:multiChan,
+              mixedChan:mixedChan, total:total };
   document.getElementById('s1Badge').className='badge done'; document.getElementById('s1Badge').textContent='已完成 ✓';
   document.getElementById('s1Stat').style.display='block';
   document.getElementById('s1FilterRow').style.display='flex';
@@ -678,13 +870,22 @@ function s1Analyze(){
     return '<div class="stat blue"><div class="v">'+r+'%</div><div class="l">'+c.name+' 在线率</div></div>';
   }).join('');
   document.getElementById('s1Stats').innerHTML =
-    '<div class="stat"><div class="v">'+total+'</div><div class="l">设备总数(有IP)</div></div>' +
+    '<div class="stat"><div class="v">'+total+'</div><div class="l">'+(byDevice?'设备总数(按设备)':'设备总数(按通道)')+'</div></div>' +
     '<div class="stat on"><div class="v">'+on+'</div><div class="l">在线</div></div>' +
     '<div class="stat off"><div class="v">'+off+'</div><div class="l">离线</div></div>' +
     carrHtml + rateHtml +
     '<div class="stat"><div class="v">'+full.otherRows.length+'</div><div class="l">段外IP</div></div>' +
     '<div class="stat"><div class="v">'+full.norecRows.length+'</div><div class="l">无IP通道</div></div>' +
     '<div class="stat blue"><div class="v">'+(total? (on/total*100).toFixed(1):0)+'%</div><div class="l">总在线率</div></div>';
+  var nd = document.getElementById('s1DedupNote');
+  if(nd){
+    nd.innerHTML = '<span style="display:inline-block;background:'+(byDevice?'#eef4ff':'#fff4e6')+
+      ';color:'+(byDevice?'#2f5496':'#b45309')+';border:1px solid '+(byDevice?'#cfe0ff':'#ffd8a8')+
+      ';border-radius:6px;padding:1px 9px;font-size:12px;font-weight:600">口径：'+modeLabel+'</span>'+
+      '<span style="margin-left:10px">通道行 '+chanRows+' 行'+
+      (multiChan ? '　｜　多通道设备 '+multiChan+' 台（其中在线/离线混合 '+mixedChan+' 台，按在线计）' : '')+
+      '　｜　计入 '+total+(byDevice?' 台':' 条通道')+'</span>';
+  }
   var _sumAoa = buildSumAoa(); if(_sumAoa) renderSumTbl(document.getElementById('s1SumTbl'), _sumAoa);
   document.getElementById('s1Pass').onclick = function(){
     s2SetRight(S1.filtered.map(function(r){ return {ip:r[0], name:r[1]}; }), '步骤1离线名单'+(S1.filter==='全部'?'':'（'+S1.filter+'）'));
@@ -696,14 +897,14 @@ function s1Analyze(){
   document.getElementById('s1ReportBtn').disabled = total+full.otherRows.length+full.norecRows.length===0;
   document.getElementById('s1Report').style.display = 'none';
   if(off===0) toast('🎉 没有离线设备！');
-  else toast('✅ 步骤1完成：'+off+' 台离线，可按运营商筛选后送入步骤2');
+  else toast('✅ 步骤1完成（口径：'+modeLabel+'）：'+off+(byDevice?' 台':' 条通道')+'离线，可按运营商筛选后送入步骤2');
 }
-document.getElementById('s1File').addEventListener('change', function(e){ if(e.target.files[0]) s1Handle(e.target.files[0]); });
+document.getElementById('s1File').addEventListener('change', function(e){ if(e.target.files.length) s1HandleFiles(e.target.files); });
 document.getElementById('s1Export').addEventListener('click', function(){
   var suffix = S1.filter==='全部' ? '全部' : S1.filter;
   exportBook([
     {name:'离线名单('+suffix+')', aoa:[['设备IP','设备名称','运营商'].concat(S1.extHeads||[])].concat(S1.filtered), type:'plain'},
-    {name:'统计', aoa:[['统计项','数量'],['筛选条件', S1.filter+'离线'],['离线设备数（筛选后）', S1.filtered.length],['离线设备数（全部）', S1.offline.length]], type:'plain', opts:{alt:false}}
+    {name:'统计', aoa:[['统计项','数量'],['筛选条件', S1.filter+'离线'],['离线设备数（筛选后）', S1.filtered.length],['离线设备数（全部）', S1.offline.length],['统计口径', (S1.mode&&S1.mode.label)||'']], type:'plain', opts:{alt:false}}
   ], S1.srcName+'_离线名单_'+suffix+'_'+ts()+'.xlsx');
 });
 /* 「分运营商在线状态」导出：12 个 sheet（已美化，与参考 Excel 一致） */
@@ -741,6 +942,7 @@ function s1GenReport(){
   D['未分配'] = { head:H3.slice(), rows:F.otherRows.concat(F.norecRows), statusCol:2 };
   order.push('未分配');
   RP.data = D; RP.order = order;
+  var _m = S1.mode || {};
   var total = F.recRows.length, online = F.recOn;
   var ops = SEGMENTS.map(function(c){
     var on = (F.carrOn[c.name]||[]).length, off = (F.carrOff[c.name]||[]).length;
@@ -749,7 +951,13 @@ function s1GenReport(){
   var otherTot = F.otherRows.length, norecTot = F.norecRows.length;
   /* 总览：环形图 + 指标卡 */
   var rate = total ? online*100/total : 0;
-  var html = '<div class="rp-stats-row">'+
+  var _bd = '<div style="display:inline-block;background:'+(_m.byDevice!==false?'#eef4ff':'#fff4e6')+
+    ';color:'+(_m.byDevice!==false?'#2f5496':'#b45309')+';border:1px solid '+(_m.byDevice!==false?'#cfe0ff':'#ffd8a8')+
+    ';border-radius:6px;padding:2px 10px;font-size:12px;font-weight:600">口径：'+(_m.label||'')+'</div>'+
+    '<div style="margin:8px 0 12px;font-size:12px;color:#5b6b7c">通道行 '+(_m.chanRows||0)+' 行'+
+    (_m.multiChan ? '　｜　多通道设备 '+_m.multiChan+' 台（其中在线/离线混合 '+(_m.mixedChan||0)+' 台，按在线计）' : '')+
+    '　｜　计入 '+total+(_m.byDevice!==false?' 台':' 条通道')+'</div>';
+  var html = _bd + '<div class="rp-stats-row">'+
     '<div class="rp-donut-card">'+
       '<div class="rp-donut" style="background:conic-gradient(#16a34a 0 '+rate.toFixed(1)+'%,#e2e8f2 '+rate.toFixed(1)+'% 100%)">'+
         '<div class="hole"><b>'+rate.toFixed(1)+'%</b><span>总在线率</span></div></div>'+

@@ -114,9 +114,9 @@ background:#fff;border-radius:20px;cursor:pointer;font-size:13px;transition:.15s
 </div>
 
 <div id="drop">
-<div class="big">点击选择 或 拖拽 xlsx 文件到此处</div>
-<div class="tip">支持 .xlsx / .xls，表格需包含「设备IP」「设备名称」「通道状态」列</div>
-<input type="file" id="file" accept=".xlsx,.xls" style="display:none">
+<div class="big">点击选择 或 拖拽 xlsx / zip 文件到此处</div>
+<div class="tip">支持 .xlsx / .xls / .zip（内含导出表格），表格需包含「设备IP」「设备名称」「通道状态」列；新版导出 DeviceDataInformation_*_0/_1 拆多份时按住 Ctrl 一次全选，自动按行拼接；导出成 zip 压缩包时直接选 zip 即可，自动解包拼接</div>
+<input type="file" id="file" accept=".xlsx,.xls,.zip" multiple style="display:none">
 </div>
 <div class="sheet-pick" id="sheetPick" style="display:none">
   <label>📑 子表：</label>
@@ -134,8 +134,17 @@ background:#fff;border-radius:20px;cursor:pointer;font-size:13px;transition:.15s
 <thead><tr><th>运营商</th><th>起始IP</th><th>结束IP</th><th>操作</th></tr></thead>
 <tbody id="segBody"></tbody>
 </table>
+
 <button class="btn gray mini" onclick="addOp()">添加运营商</button>
 <button class="btn gray mini" onclick="resetCfg()">恢复默认</button>
+<h2 style="margin-top:16px">③ 统计口径（一台设备多个通道怎么算）</h2>
+<div class="desc" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+<select id="dedupMode" style="padding:6px 10px;border:1px solid #dfe5ee;border-radius:8px;font-size:13px;background:#fff">
+<option value="device" selected>按设备去重（一台设备算 1 台）</option>
+<option value="all">全部通道（按行，多通道算多台）</option>
+</select>
+<span>同一设备IP的多个通道（全景 / 结构化等）合并为 1 台，任一通道在线即算设备在线；切换后点「生成报表」重算</span>
+</div>
 <button class="btn" onclick="generate()">生成报表</button>
 </div>
 
@@ -271,6 +280,91 @@ function delOp(i){ var c=loadCfg(); c.splice(i,1); saveCfg(c); renderCfg(); }
 function addOp(){ var c=loadCfg(); c.push({name:'新运营商', segs:[['0.0.0.0','0.0.0.0']]}); saveCfg(c); renderCfg(); }
 function resetCfg(){ localStorage.removeItem('devSegCfg'); renderCfg(); }
 
+/* ===== zip 压缩包支持（平台导出可能打包成 zip，内含 _0/_1 等多份 xlsx）=====
+   原生实现：读 zip 中央目录 → 解出 .xlsx/.xls → 交给既有「多文件拼接」逻辑；不引入第三方库 */
+function zipReadEntries(u8){
+  var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  var i = u8.length - 22, min = Math.max(0, u8.length - 22 - 65536);
+  while(i >= min){ if(dv.getUint32(i, true) === 0x06054b50) break; i--; }
+  if(i < min) throw new Error('不是有效的 zip 压缩包');
+  var count = dv.getUint16(i+10, true), cdOff = dv.getUint32(i+16, true);
+  var entries = [], p = cdOff;
+  for(var k=0;k<count;k++){
+    if(dv.getUint32(p, true) !== 0x02014b50) throw new Error('zip 中央目录损坏');
+    var flags = dv.getUint16(p+8, true), method = dv.getUint16(p+10, true);
+    var csize = dv.getUint32(p+20, true), usize = dv.getUint32(p+24, true);
+    var nlen = dv.getUint16(p+28, true), elen = dv.getUint16(p+30, true), clen = dv.getUint16(p+32, true);
+    var lho = dv.getUint32(p+42, true);
+    var raw = u8.subarray(p+46, p+46+nlen), name = '';
+    try{ name = new TextDecoder((flags & 0x800) ? 'utf-8' : 'gbk').decode(raw); }
+    catch(e){ for(var q=0;q<raw.length;q++) name += String.fromCharCode(raw[q]); }
+    entries.push({name:name, method:method, csize:csize, usize:usize, lho:lho});
+    p += 46 + nlen + elen + clen;
+  }
+  return entries;
+}
+function zipEntrySlice(u8, en){
+  var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), p = en.lho;
+  if(dv.getUint32(p, true) !== 0x04034b50) throw new Error('zip 本地头损坏：'+en.name);
+  var nlen = dv.getUint16(p+26, true), elen = dv.getUint16(p+28, true);
+  var s = p + 30 + nlen + elen;
+  return u8.subarray(s, s + en.csize);
+}
+function zipInflateRaw(comp){
+  if(typeof DecompressionStream === 'undefined' || typeof Response === 'undefined')
+    return Promise.reject(new Error('当前环境不支持 zip 解压（缺少 DecompressionStream）'));
+  try{
+    var stream = new Response(comp).body.pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).arrayBuffer().then(function(ab){ return new Uint8Array(ab); });
+  }catch(e){ return Promise.reject(e); }
+}
+function zipUnzip(file){
+  var readAb = (typeof file.arrayBuffer === 'function')
+    ? file.arrayBuffer()
+    : new Promise(function(res, rej){
+        var fr = new FileReader();
+        fr.onload = function(e){ res(e.target.result); };
+        fr.onerror = function(){ rej(new Error('读取 '+file.name+' 失败')); };
+        fr.readAsArrayBuffer(file);
+      });
+  return readAb.then(function(ab){
+    var u8 = new Uint8Array(ab);
+    if(u8.length < 4 || u8[0] !== 0x50 || u8[1] !== 0x4B) throw new Error(file.name + ' 不是有效的 zip 压缩包');
+    var entries = zipReadEntries(u8), xlsx = [], skipped = [];
+    entries.forEach(function(en){
+      if(/\/$/.test(en.name) || en.name.indexOf('__MACOSX/') === 0 || en.name.charAt(0) === '.') return;
+      if(!/\.(xlsx|xls)$/i.test(en.name)){ skipped.push(en.name); return; }
+      xlsx.push(en);
+    });
+    if(!xlsx.length) throw new Error('压缩包 '+file.name+' 里没有 .xlsx/.xls 文件' + (skipped.length ? '（已忽略：'+skipped.join('、')+'）' : ''));
+    return Promise.all(xlsx.map(function(en){
+      var data = (en.method === 0) ? Promise.resolve(zipEntrySlice(u8, en))
+        : (en.method === 8) ? zipInflateRaw(zipEntrySlice(u8, en))
+        : Promise.reject(new Error('不支持的压缩方式（method '+en.method+'）：'+en.name));
+      return data.then(function(d){
+        if(en.usize && d.length !== en.usize) throw new Error('解压大小不符：'+en.name);
+        return new File([d], en.name);
+      });
+    })).then(function(files){
+      return { zipName: file.name, files: files, skipped: skipped };
+    });
+  });
+}
+function zipExpandFiles(list){
+  var fl = Array.prototype.slice.call(list || []).filter(function(f){ return f && f.name; });
+  var zips = fl.filter(function(f){ return /\.zip$/i.test(String(f.name)); });
+  if(!zips.length) return Promise.resolve({ files: fl, notes: [] });
+  var rest = fl.filter(function(f){ return !/\.zip$/i.test(String(f.name)); });
+  return Promise.all(zips.map(zipUnzip)).then(function(rs){
+    var files = rest.slice(), notes = [];
+    rs.forEach(function(r){
+      files = files.concat(r.files);
+      notes.push(r.zipName + ' → ' + r.files.length + ' 个表格' + (r.skipped.length ? '（忽略 ' + r.skipped.length + ' 个非表格文件）' : ''));
+    });
+    return { files: files, notes: notes };
+  });
+}
+var ZIP_NOTE = '';
 /* ---------- 文件导入 ---------- */
 function handleFile(file){
   if(!/\.xlsx?$/i.test(file.name)){ $('status').textContent='请选择 .xlsx 或 .xls 文件'; return; }
@@ -282,8 +376,65 @@ function handleFile(file){
   };
   fr.readAsArrayBuffer(file);
 }
+/* ---------- 多文件导入：新版导出拆分多份（DeviceDataInformation_*_0/_1），同表头按行拼接；zip 压缩包自动解包 ---------- */
+function handleFiles(files){
+  zipExpandFiles(files).then(function(rz){
+    ZIP_NOTE = rz.notes.length ? '📦 '+rz.notes.join('；') : '';
+    if(ZIP_NOTE) $('status').textContent = ZIP_NOTE;
+    var fl = rz.files.filter(function(f){ return /\.(xlsx?|zip)$/i.test(f.name); });
+    if(!fl.length){ $('status').textContent='请选择 .xlsx / .xls 或 .zip（内含导出表格）文件'; return; }
+    if(fl.length===1){ handleFile(fl[0]); return; }
+    $('status').textContent = '正在读取 '+fl.length+' 个文件 …';
+    var ps = fl.map(function(f){
+      return new Promise(function(resolve, reject){
+        var fr = new FileReader();
+        fr.onload = function(e){ resolve({buf:e.target.result, name:f.name}); };
+        fr.onerror = function(){ reject(new Error('读取 '+f.name+' 失败')); };
+        fr.readAsArrayBuffer(f);
+      });
+    });
+    Promise.all(ps).then(function(list){
+      try{ parseWorkbookList(list); }
+      catch(err){ $('status').textContent = '解析失败：'+err.message; }
+    }).catch(function(err){ $('status').textContent=err.message; });
+  }).catch(function(err){ $('status').textContent = '❌ '+err.message; });
+}
+function parseWorkbookList(list){
+  var sheets = [], best = -1, bestScore = -1, logs = [];
+  list.forEach(function(it){
+    var wb = XLSX.read(it.buf, {type:'array'});
+    for(var i=0;i<wb.SheetNames.length;i++){
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[i]], {header:1, defval:'', raw:false});
+      if(!rows.length) continue;
+      var hd = rows[0].map(function(v){return String(v==null?'':v).trim();});
+      var score = hd.indexOf('设备IP')>=0 ? rows.length : 0;
+      sheets.push({name:wb.SheetNames[i]+' · '+it.name, rows:rows});
+      logs.push('   ✓ '+it.name+'（'+(rows.length-1)+' 行）');
+      if(score > bestScore){ best = sheets.length-1; bestScore = score; }
+    }
+  });
+  if(!sheets.length) throw new Error('表格为空');
+  BOOK = {fileName:'合并'+list.length+'个文件', sheets:sheets, best:best>=0?best:0};
+  var pick = $('sheetPick'), sel = $('sheetSel');
+  if(sheets.length > 1){
+    var html = '<option value="__all__">全部（合并 '+sheets.length+' 个子表，多文件自动选中）</option>';
+    sheets.forEach(function(s,i){ html += '<option value="'+i+'"'+(i===BOOK.best?' selected':'')+'>'+escHtml(s.name)+'</option>'; });
+    sel.innerHTML = html;
+    pick.style.display = 'flex';
+    if(!sel._bound){ sel._bound = true; sel.addEventListener('change', applySheet); }
+    sel.value = '__all__';
+  } else {
+    pick.style.display = 'none';
+    sel.innerHTML = '';
+  }
+  $('report').style.display='none';
+  $('cfgPanel').style.display='block';
+  applySheet();
+  if(logs.length) $('status').textContent += '\n'+logs.join('\n')+(MERGE_DROPPED?('\n   ↳ 已去掉整行完全重复 '+MERGE_DROPPED+' 行'):'');
+}
 /* ---------- 子表选择（全部 / 指定子表） ---------- */
 var BOOK = null;
+var MERGE_DROPPED = 0;   /* __all__ 合并时去掉的整行完全重复行数 */
 function mergeSheets(){
   var out = [];
   BOOK.sheets.forEach(function(sh){
@@ -293,7 +444,15 @@ function mergeSheets(){
     var same = h0 && first.length===h0.length && first.every(function(c,i){ return String(c==null?'':c).trim()===String(h0[i]==null?'':h0[i]).trim(); });
     out = out.concat(same ? sh.rows.slice(1) : sh.rows);
   });
-  return out;
+  /* 整行完全重复去重（平台 Nonamed 等重复通道） */
+  var seen = {}, dedup = out.length ? [out[0]] : [], dropped = 0;
+  for(var k=1;k<out.length;k++){
+    var key = out[k].join('\u0001');
+    if(seen[key]){ dropped++; continue; }
+    seen[key] = 1; dedup.push(out[k]);
+  }
+  MERGE_DROPPED = dropped;
+  return dedup;
 }
 function applySheet(){
   if(!BOOK) return;
@@ -305,13 +464,14 @@ function applySheet(){
   SRC = {head:head, rows:rows.slice(1), file:fname};
   // 必选列固定映射：仅按表头「设备IP」「设备名称」「通道状态」精确匹配
   SRC.IP = head.indexOf('设备IP');
-  SRC.Name = head.indexOf('设备名称');
-  SRC.Status = head.indexOf('通道状态');
+  var hdN = head.map(function(v){ return String(v==null?'':v).replace(/^\*+/, '').trim(); });
+  SRC.Name = hdN.indexOf('设备名称');
+  SRC.Status = hdN.indexOf('通道在离线状态')>=0 ? hdN.indexOf('通道在离线状态') : hdN.indexOf('通道状态');
   // 可选列（通道名称 / 附加列）默认不使用
   SRC.Chan = -1;
   SRC.Extra = -1;
   renderColMap();
-  $('status').textContent = '已载入 '+fname+'：'+SRC.rows.length+' 行 × '+head.length+' 列。请确认下方列映射与IP段配置，点击"生成报表"。';
+  $('status').textContent = '已载入 '+fname+'：'+SRC.rows.length+' 行 × '+head.length+' 列'+(ZIP_NOTE?'（'+ZIP_NOTE+'）':'')+'。请确认下方列映射与IP段配置，点击"生成报表"。';
   $('report').style.display='none';
   $('cfgPanel').style.display='block';
 }
@@ -418,6 +578,29 @@ function generate(){
       recs.push({ip:ip, num:n, name:name, status:online?'在线':'离线', ext:getExt(r)});
     }
   });
+  // 统计口径：按设备去重（同一IP多通道合并，任一在线即在线）／全部通道（按行）
+  var byDevice = ($('dedupMode') ? $('dedupMode').value : 'device') !== 'all';
+  var modeLabel = byDevice ? '按设备(IP)去重' : '全部通道(按行)';
+  var chanRows = recs.length, multiChan = 0, mixedChan = 0;
+  if(byDevice){
+    var order = [], imap = {};
+    recs.forEach(function(rec){
+      var ex = imap[rec.ip];
+      if(!ex){
+        ex = imap[rec.ip] = {ip:rec.ip, num:rec.num, name:rec.name, onN:0, offN:0, ch:0,
+                             ext:rec.ext, status:rec.status};
+        order.push(ex);
+      }
+      ex.ch++;
+      if(!ex.name && rec.name) ex.name = rec.name;
+      if(rec.status==='在线') ex.onN++; else ex.offN++;
+    });
+    order.forEach(function(x){
+      x.status = x.onN>0 ? '在线' : '离线';
+      if(x.ch>1){ multiChan++; if(x.onN && x.offN) mixedChan++; }
+    });
+    recs = order;
+  }
   recs.sort(function(a,b){ return a.num<b.num?-1:(a.num>b.num?1:0); });
 
   var cfg = getCfg();
@@ -453,6 +636,8 @@ function generate(){
   var norecOn = norec.filter(function(r){return r[2]==='在线';}).length;
   STAT = {
     total:total, online:online,
+    modeLabel:modeLabel, byDevice:byDevice, chanRows:chanRows,
+    multiChan:multiChan, mixedChan:mixedChan,
     ops: ispStat.map(function(s){
       return {name:s.name,
         segs: s.segs.map(function(x){return int2ip(x[0])+'-'+int2ip(x[1]);}).join('、'),
@@ -466,17 +651,23 @@ function generate(){
     return card(r+'%', s.name+' 在线率', 'on');
   }).join('');
   // 总览：环形图 + 指标卡
-  var html = '<div class="stats-row">'+
+  var badge = '<div style="display:inline-block;background:'+(byDevice?'#eef4ff':'#fff4e6')+
+    ';color:'+(byDevice?'#2f5496':'#b45309')+';border:1px solid '+(byDevice?'#cfe0ff':'#ffd8a8')+
+    ';border-radius:6px;padding:2px 10px;font-size:12px;font-weight:600">口径：'+modeLabel+'</div>'+
+    '<div style="margin:8px 0 12px;font-size:12px;color:var(--muted)">通道行 '+chanRows+' 行'+
+    (multiChan ? '　｜　多通道设备 '+multiChan+' 台（其中在线/离线混合 '+mixedChan+' 台，按在线计）' : '')+
+    '　｜　计入 '+total+(byDevice?' 台':' 条通道')+'</div>';
+  var html = badge + '<div class="stats-row">'+
     '<div class="donut-card">'+
       '<div class="donut" style="background:conic-gradient(var(--online) 0 '+rate.toFixed(1)+'%,#e2e8f2 '+rate.toFixed(1)+'% 100%)">'+
         '<div class="hole"><b>'+rate.toFixed(1)+'%</b><span>总在线率</span></div></div>'+
       '<div class="donut-legend">'+
         '<div><i style="background:var(--online)"></i>在线 <b>'+online+'</b> 台</div>'+
         '<div><i style="background:var(--offline)"></i>离线 <b>'+(total-online)+'</b> 台</div>'+
-        '<div><i style="background:#c3cad6"></i>合计 <b>'+total+'</b> 台（有IP）</div>'+
+        '<div><i style="background:#c3cad6"></i>合计 <b>'+total+'</b> '+(byDevice?'台':'条通道')+'（有IP）</div>'+
       '</div></div>'+
     '<div class="cards">'+
-      card(total,'设备总数（有IP）')+
+      card(total, byDevice ? '设备总数（有IP）' : '通道总数（有IP）')+
       card(online,'在线','on')+
       card(total-online,'离线','off')+
       card(rate.toFixed(1)+'%','总在线率','on')+
@@ -523,8 +714,8 @@ function generate(){
     });
   });
   $('report').style.display='block';
-  $('sub').textContent = '源文件：'+SRC.file+' | 生成时间：'+new Date().toLocaleString('zh-CN')+' | 在线率按有IP设备统计';
-  $('status').textContent = '报表已生成：'+(other.length+norec.length+ispStat.reduce(function(a,s){return a+s.tot;},0))+' 条数据已分类。';
+  $('sub').textContent = '源文件：'+SRC.file+' | 生成时间：'+new Date().toLocaleString('zh-CN')+' | 统计口径：'+modeLabel+'（通道行 '+chanRows+' → 计入 '+total+(byDevice?' 台':' 条')+'）';
+  $('status').textContent = '报表已生成（口径：'+modeLabel+'）：'+(other.length+norec.length+ispStat.reduce(function(a,s){return a+s.tot;},0))+' 条数据已分类。';
   showSheet('原表');
   window.scrollTo({top:$('report').offsetTop-10, behavior:'smooth'});
 }
@@ -655,6 +846,16 @@ function exportXlsx(){
           row.getCell(2).alignment = {horizontal:'left'};
           for(var k2=3;k2<=6;k2++){ row.getCell(k2).alignment = {horizontal:'center'}; }
         });
+        // 统计口径标记（写在统计行下方，不影响上面的统计行）
+        var noteR = ws0.getRow(rows0.length + 3);
+        noteR.getCell(1).value = '统计口径';
+        noteR.getCell(1).font = {bold:true, color:{argb:'FF8A94A6'}};
+        noteR.getCell(2).value = (STAT.modeLabel||'') +
+          (STAT.byDevice ? '（同一设备IP多通道合并为 1 台，任一通道在线即算在线）' : '（一个通道算一台）') +
+          '　｜ 通道行 ' + (STAT.chanRows==null ? '—' : STAT.chanRows) + ' 行 → 计入 ' + STAT.total + (STAT.byDevice ? ' 台' : ' 条') +
+          (STAT.multiChan ? '　｜ 多通道设备 ' + STAT.multiChan + ' 台' : '');
+        noteR.getCell(2).font = {color:{argb:'FF8A94A6'}};
+        noteR.getCell(2).alignment = {horizontal:'left'};
         ws0.getColumn(1).width = 20;
         ws0.getColumn(2).width = 50;
         ws0.getColumn(3).width = 10; ws0.getColumn(4).width = 9;
@@ -707,10 +908,10 @@ function exportXlsx(){
 /* ---------- 事件绑定 ---------- */
 var drop = $('drop');
 drop.addEventListener('click', function(){ $('file').click(); });
-$('file').addEventListener('change', function(){ if(this.files.length) handleFile(this.files[0]); });
+$('file').addEventListener('change', function(){ if(this.files.length) handleFiles(this.files); });
 ['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev, function(e){e.preventDefault(); drop.classList.add('hover');}); });
 ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev, function(e){e.preventDefault(); drop.classList.remove('hover');}); });
-drop.addEventListener('drop', function(e){ if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); });
+drop.addEventListener('drop', function(e){ if(e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
 var stimer = null;
 $('search').addEventListener('input', function(){ clearTimeout(stimer); stimer = setTimeout(applySearch, 300); });
 renderCfg();

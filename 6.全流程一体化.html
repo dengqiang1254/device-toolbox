@@ -96,13 +96,13 @@
     <div class="grid3">
       <div class="slot" id="slotNew">
         <div class="t">📈 最新文件<span class="tag">必填</span></div>
-        <div class="d">设备数据汇总信息（原始）/ 上次的分运营商在线状态文件均可；勿用维修表等结果文件</div>
+        <div class="d">设备数据汇总信息 / DeviceDataInformation（原始导出，拆分成 _0/_1 等多份时可全选，自动拼接；导出成 zip 压缩包时直接选 zip 即可，自动解包）/ 上次的分运营商在线状态文件均可；勿用维修表等结果文件</div>
         <div class="f" id="nmNew"></div>
         <div class="hint">点击选择，或拖到此处</div>
       </div>
       <div class="slot" id="slotOld">
         <div class="t">📉 旧文件<span class="tag">必填</span></div>
-        <div class="d">昨天（上一次）的同格式文件；不能用维修表 / 对比差异结果</div>
+        <div class="d">昨天（上一次）的同格式文件（同样支持多选与 zip 自动解包拼接）；不能用维修表 / 对比差异结果</div>
         <div class="f" id="nmOld"></div>
         <div class="hint">点击选择，或拖到此处</div>
       </div>
@@ -113,7 +113,7 @@
         <div class="hint">点击选择，或拖到此处</div>
       </div>
     </div>
-    <div class="note">三个文件都只需选一次；换文件时重新点对应卡片即可。</div>
+    <div class="note">三个文件都只需选一次；换文件时重新点对应卡片即可。平台导出拆成多份（如 _0/_1）时按住 Ctrl 多选或一起拖入，会自动拼接并去掉整行重复。</div>
   </div>
 
   <div class="card">
@@ -127,8 +127,16 @@
         <option value="广电">广电</option>
         <option value="全部">全部（不按运营商筛选）</option>
       </select>
+      <label class="lb" for="dedupMode" style="margin-left:14px">统计口径</label>
+      <select id="dedupMode">
+        <option value="device" selected>按设备去重（一台设备算 1 台）</option>
+        <option value="all">全部通道（按行，多通道算多台）</option>
+      </select>
       <label class="chk"><input type="checkbox" id="withSource" checked> 结果① 包含「源数据」子表</label>
       <span class="tips">（取消可显著加快导出、减小文件；约 13MB → 0.4MB）</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span class="tips" style="color:#8a94a6">口径说明：<b>按设备去重</b> = 同一设备IP的多个通道（全景/结构化等）合并为 1 台，任一通道在线即算设备在线；<b>全部通道</b> = 一个通道算一台（平台导出多少行就统计多少台）。结果概览顶部会标明本次口径。</span>
     </div>
     <button class="run" id="runBtn" disabled>🚀 一键运行</button>
     <div class="err" id="err"></div>
@@ -155,8 +163,8 @@
   </div>
 </div>
 
-<input type="file" id="fNew" accept=".xlsx,.xls" style="display:none">
-<input type="file" id="fOld" accept=".xlsx,.xls" style="display:none">
+<input type="file" id="fNew" accept=".xlsx,.xls,.zip" multiple style="display:none">
+<input type="file" id="fOld" accept=".xlsx,.xls,.zip" multiple style="display:none">
 <input type="file" id="fDb"  accept=".xlsx,.xls" style="display:none">
 
 <script>
@@ -266,15 +274,55 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return bestSheet(book);
   }
 
-  var OK_INPUT = '可用输入：① 原始汇总文件（设备数据汇总信息_*.xlsx）；② 本工具导出的「分运营商在线状态」文件（会自动取其「源数据」或「原表」子表）';
+  var OK_INPUT = '可用输入：① 原始导出文件（设备数据汇总信息_*.xlsx、DeviceDataInformation_*_0/_1.xlsx 或其 zip 压缩包，拆分成多份 / 打包时全选会自动解包拼接）；② 本工具导出的「分运营商在线状态」文件（会自动取其「源数据」或「原表」子表）';
+
+  /* ============ 多文件合并读取：平台导出可能拆成多份（如 _0/_1），表头一致则按行拼接，并去掉整行完全重复的行 ============ */
+  function readMergeFiles(files, label){
+    if(!files || !files.length) throw new Error('未选择「' + label + '」文件');
+    var logs = [], merged = null, mergedName = '', totalRows = 0;
+    for(var i=0;i<files.length;i++){
+      var f = files[i];
+      var book = readBook(f.buf, f.name);
+      var kn = detectResultKind(book.fileName, book);
+      if(kn && kn.kind !== 'full')
+        throw new Error('「' + label + '」选成了流程产生的结果文件（' + kn.name + '），无法从中还原设备数据。' + OK_INPUT);
+      var sh = pickAnalysisSheet(book);
+      if(kn && kn.kind === 'full' && sh.name !== '源数据' && sh.name !== '原表')
+        throw new Error('「' + label + '」是「分运营商在线状态」结果文件，但里面没有「源数据」或「原表」子表（可能被删过），无法还原完整设备清单。' + OK_INPUT);
+      if(kn && kn.kind === 'full') logs.push('   ↳ ' + book.fileName + ' 识别为结果文件，自动使用其「' + sh.name + '」子表');
+      var aoa = sh.aoa;
+      if(!merged){
+        merged = aoa; mergedName = book.fileName;
+      } else {
+        var h1 = (merged[0]||[]).map(function(x){ return String(x==null?'':x).trim(); }).join('\u0001');
+        var h2 = (aoa[0]||[]).map(function(x){ return String(x==null?'':x).trim(); }).join('\u0001');
+        if(h1 !== h2)
+          throw new Error('「' + label + '」多份文件表头不一致，无法拼接：' + mergedName + ' 与 ' + book.fileName + '（列结构不同的文件请分开运行）');
+        for(var r=1;r<aoa.length;r++) merged.push(aoa[r]);
+      }
+      totalRows += aoa.length - 1;
+      logs.push('   ✓ ' + book.fileName + '（' + (aoa.length-1) + ' 行，累计 ' + totalRows + ' 行）');
+    }
+    var seen = {}, out = [merged[0]], dropped = 0;
+    for(var k=1;k<merged.length;k++){
+      var key = merged[k].join('\u0001');
+      if(seen[key]){ dropped++; continue; }
+      seen[key] = 1; out.push(merged[k]);
+    }
+    if(dropped) logs.push('   ↳ 已去掉整行完全重复 ' + dropped + ' 行（平台 Nonamed 等重复通道）');
+    return { aoa: out, fileName: mergedName, fileCount: files.length, rows: out.length - 1, dropped: dropped, logs: logs };
+  }
 
   /* ============ 步骤1：设备数据 → 分类 + 离线名单 ============ */
-  function step1Analyze(aoa, carrier){
+  function step1Analyze(aoa, carrier, opts){
+    opts = opts || {};
+    /* 统计口径：true/缺省 = 按设备(IP)去重；false = 全部通道(按行) */
+    var byDevice = opts.byDevice !== false;
     var head = aoa[0] || [];
     var cols = {
       ipC: findCol(head, function(h){ return h === '设备ip'; }),
-      nmC: findCol(head, function(h){ return h === '设备名称'; }),
-      stC: findCol(head, function(h){ return h === '通道状态'; }),
+      nmC: findCol(head, function(h){ return h.replace(/\*/g, '') === '设备名称'; }),
+      stC: findCol(head, function(h){ var c = h.replace(/\*/g, ''); return c === '通道状态' || c === '通道在离线状态'; }),
       chC: findCol(head, function(h){ return h.indexOf('通道名称')>=0; })
     };
     if(cols.ipC < 0) throw new Error('未找到「设备IP」列，请检查表头');
@@ -282,6 +330,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var total=0, on=0, off=0, rows=[];
     var byCarrier = {};
     var full = { recRows:[], otherRows:[], norecRows:[], carrOn:{}, carrOff:{}, recOn:0, otherOn:0, norecOn:0 };
+    var recs=[], idx={}, chanRows=0, multiChan=0, mixedChan=0;
     for(var i=1;i<aoa.length;i++){
       var r = aoa[i]; if(!r || !r.length) continue;
       var ipRaw = String(r[ipC]==null?'':r[ipC]).trim();
@@ -296,22 +345,40 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if(online) full.norecOn++;
         continue;
       }
-      var c = carrierOf(ip);
-      total++; if(online) on++; else off++;
-      var base = [ip, name, stTxt];
-      if(c==='未分配'){ full.otherRows.push(base); if(online) full.otherOn++; }
+      chanRows++;
+      if(byDevice){
+        var rec = idx[ip];
+        if(!rec){ rec = idx[ip] = { ip:ip, name:name, on:0, off:0, ch:0 }; recs.push(rec); }
+        rec.ch++;
+        if(!rec.name && name) rec.name = name;
+        if(online) rec.on++; else rec.off++;
+      } else {
+        recs.push({ ip:ip, name:name, on:(online?1:0), off:(online?0:1), ch:1 });
+      }
+    }
+    /* 按口径汇总：按设备时同 IP 多通道合并，任一通道在线即设备在线 */
+    for(var kk=0;kk<recs.length;kk++){
+      var rc = recs[kk];
+      if(rc.ch > 1){ multiChan++; if(rc.on && rc.off) mixedChan++; }
+      var onD = rc.on > 0;
+      total++; if(onD) on++; else off++;
+      var base = [rc.ip, rc.name, onD?'在线':'离线'];
+      var c = carrierOf(rc.ip);
+      if(c==='未分配'){ full.otherRows.push(base); if(onD) full.otherOn++; }
       else {
-        var b = byCarrier[c] = byCarrier[c] || {t:0,o:0}; b.t++; if(!online) b.o++;
-        if(online){ (full.carrOn[c]=full.carrOn[c]||[]).push(base); }
+        var b = byCarrier[c] = byCarrier[c] || {t:0,o:0}; b.t++; if(!onD) b.o++;
+        if(onD){ (full.carrOn[c]=full.carrOn[c]||[]).push(base); }
         else { (full.carrOff[c]=full.carrOff[c]||[]).push(base); }
       }
       full.recRows.push(base);
-      if(online) full.recOn++;
-      if(!online) rows.push([ip, name, c]);
+      if(onD) full.recOn++;
+      if(!onD) rows.push([rc.ip, rc.name, c]);
     }
     var filtered = (carrier==='全部') ? rows.slice() : rows.filter(function(r){ return r[2]===carrier; });
     return { cols:cols, srcAoa:aoa, total:total, on:on, off:off,
-             offline:rows, filtered:filtered, byCarrier:byCarrier, full:full };
+             offline:rows, filtered:filtered, byCarrier:byCarrier, full:full,
+             byDevice:byDevice, chanRows:chanRows, multiChan:multiChan, mixedChan:mixedChan,
+             modeLabel: byDevice ? '按设备(IP)去重' : '全部通道(按行)' };
   }
 
   /* ============ Excel 样式（与板块四一致） ============ */
@@ -342,7 +409,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       for(r=1;r<R;r++) for(c=0;c<C;c++){ v=aoa[r][c]; s=(c===stC)?stStyle(v):{fill:{fgColor:{rgb:((r-1)%2===0?'F0F5FF':'FFFFFF')}},alignment:{horizontal:'left',vertical:'center'}}; setCellS(ws,XLSX.utils.encode_cell({r:r,c:c}),s); }
     } else if(type==='source'){
       var head=aoa[0]||[],sc=-1;
-      for(c=0;c<head.length;c++){ if(String(head[c]==null?'':head[c])==='通道状态'){ sc=c; break; } }
+      for(c=0;c<head.length;c++){ var hc=String(head[c]==null?'':head[c]); if(hc==='通道状态'||hc==='通道在离线状态'){ sc=c; break; } }
       var cols2=[]; for(c=0;c<C;c++) cols2.push(c===0?{wch:15}:(c===sc?{wch:10}:{wch:13}));
       ws['!cols']=cols2;
       for(r=1;r<R;r++) for(c=0;c<C;c++){
@@ -804,6 +871,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
   async function run(opts){
     var carrier = opts.carrier || '电信';
+    var byDevice = opts.byDevice !== false;
+    var modeLbl = byDevice ? '按设备(IP)去重' : '全部通道(按行)';
     /* 基准名：去掉扩展名，并剥掉「_分运营商在线状态 / _离线名单_电信」等结果后缀和时间戳，
        避免用结果文件当输入时输出名越叠越长 */
     var newName = String(opts.newName||'新文件').replace(/\.[^.]+$/, '')
@@ -812,38 +881,28 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var log = opts.log || function(){};
     async function LG(m){ log(m); await tick(); }
 
+    await LG('⚙️ 统计口径：' + modeLbl + (byDevice
+      ? '（同一设备IP的多个通道合并为 1 台，任一通道在线即算在线）'
+      : '（一个通道算一台，平台导出多少行就统计多少台）'));
+
     await LG('① 读取「最新文件」…');
-    var bNew = readBook(opts.newBuf, opts.newName||'新文件');
-    await LG('   ✓ ' + bNew.fileName + '（' + bNew.sheets.length + ' 个子表）');
-    var knNew = detectResultKind(bNew.fileName, bNew);
-    if(knNew && knNew.kind !== 'full')
-      throw new Error('「最新文件」选成了流程产生的结果文件（' + knNew.name + '），无法从中还原设备数据。' + OK_INPUT);
-    if(knNew && knNew.kind === 'full'){
-      var shNew = pickAnalysisSheet(bNew);
-      if(shNew.name !== '源数据' && shNew.name !== '原表')
-        throw new Error('「最新文件」是「分运营商在线状态」结果文件，但里面没有「源数据」或「原表」子表（可能被删过），无法还原完整设备清单。' + OK_INPUT);
-      await LG('   ↳ 识别为结果文件，自动使用其「' + shNew.name + '」子表');
-    }
+    var flNew = opts.newFiles || (opts.newBuf ? [{ name: opts.newName || '新文件', buf: opts.newBuf }] : null);
+    var mgNew = readMergeFiles(flNew, '最新文件');
+    for(var liN = 0; liN < mgNew.logs.length; liN++) await LG(mgNew.logs[liN]);
 
     await LG('② 读取「旧文件」…');
-    var bOld = readBook(opts.oldBuf, opts.oldName||'旧文件');
-    await LG('   ✓ ' + bOld.fileName + '（' + bOld.sheets.length + ' 个子表）');
-    var knOld = detectResultKind(bOld.fileName, bOld);
-    if(knOld && knOld.kind !== 'full')
-      throw new Error('「旧文件」选成了流程产生的结果文件（' + knOld.name + '），无法从中还原设备数据。' + OK_INPUT);
-    if(knOld && knOld.kind === 'full'){
-      var shOld = pickAnalysisSheet(bOld);
-      if(shOld.name !== '源数据' && shOld.name !== '原表')
-        throw new Error('「旧文件」是「分运营商在线状态」结果文件，但里面没有「源数据」或「原表」子表（可能被删过），无法还原完整设备清单。' + OK_INPUT);
-      await LG('   ↳ 识别为结果文件，自动使用其「' + shOld.name + '」子表');
-    }
+    var flOld = opts.oldFiles || (opts.oldBuf ? [{ name: opts.oldName || '旧文件', buf: opts.oldBuf }] : null);
+    var mgOld = readMergeFiles(flOld, '旧文件');
+    for(var liO = 0; liO < mgOld.logs.length; liO++) await LG(mgOld.logs[liO]);
 
     await LG('③ 步骤1：解析新文件 → 分运营商在线状态 + ' + carrier + '离线名单');
-    var stNew = step1Analyze(pickAnalysisSheet(bNew).aoa, carrier);
+    var stNew = step1Analyze(mgNew.aoa, carrier, {byDevice: byDevice});
+    await LG('   通道行 ' + stNew.chanRows + (stNew.multiChan ? '（多通道设备 ' + stNew.multiChan + ' 台，其中在线/离线混合 ' + stNew.mixedChan + ' 台）' : '') + ' → 按「' + modeLbl + '」计 ' + stNew.total + ' 台');
     await LG('   设备(有IP) ' + stNew.total + '｜在线 ' + stNew.on + '｜离线 ' + stNew.off + '｜' + carrier + '离线 ' + stNew.filtered.length);
 
     await LG('④ 步骤1：解析旧文件 → ' + carrier + '离线名单（作为「原离线」）');
-    var stOld = step1Analyze(pickAnalysisSheet(bOld).aoa, carrier);
+    var stOld = step1Analyze(mgOld.aoa, carrier, {byDevice: byDevice});
+    await LG('   通道行 ' + stOld.chanRows + ' → 按「' + modeLbl + '」计 ' + stOld.total + ' 台');
     await LG('   设备(有IP) ' + stOld.total + '｜在线 ' + stOld.on + '｜离线 ' + stOld.off + '｜' + carrier + '离线 ' + stOld.filtered.length);
 
     if(!stNew.filtered.length && !stOld.filtered.length) throw new Error('新旧文件的「' + carrier + '离线」名单均为空，请检查文件或运营商选择');
@@ -888,12 +947,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     await LG('⑧ 生成导出文件（大表约需十几秒，请稍候）…');
     var u1 = await buildFullBook(stNew, {withSource: opts.withSource});
     files.push({key:'full', name: newName + '_分运营商在线状态_' + t + '.xlsx', data:u1,
-                desc:'12 张子表：在线率统计/源数据/原表/四大运营商在线+离线/未分配'});
+                desc:'12 张子表：在线率统计/源数据/原表/四大运营商在线+离线/未分配　｜口径：' + modeLbl + '（' + stNew.total + ' 台）'});
     await LG('   ✓ ① ' + files[0].name);
 
     var u2 = await buildOfflineBook(stNew, carrier);
     files.push({key:'offline', name: newName + '_离线名单_' + carrier + '_' + t + '.xlsx', data:u2,
-                desc:'离线名单(' + carrier + ') ' + stNew.filtered.length + ' 台 + 统计'});
+                desc:'离线名单(' + carrier + ') ' + stNew.filtered.length + ' 台 + 统计　｜口径：' + modeLbl});
     await LG('   ✓ ② ' + files[1].name);
 
     var u3 = await buildDiffBook(res);
@@ -913,6 +972,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         oldTotal: stOld.total, oldOn: stOld.on, oldOff: stOld.off,
         carrier: carrier, filteredNew: stNew.filtered.length, filteredOld: stOld.filtered.length,
         byCarrier: stNew.byCarrier,
+        dedupMode: byDevice ? 'device' : 'all', modeLabel: modeLbl,
+        chanRows: stNew.chanRows, multiChan: stNew.multiChan, mixedChan: stNew.mixedChan,
         totalL: res.totalL, totalR: res.totalR, common: res.common, consistent: res.consistent,
         fixCnt: res.leftOnly.length, offCnt: res.rightOnly.length,
         matched: s3.matched, notFound: s3.notFound, dbInfo: dbInfo,
@@ -924,7 +985,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   return {
     ip2int:ip2int, normIP:normIP, isOnline:isOnline, isStatusOn:isStatusOn, esc:esc, ts:ts,
     carrierOf:carrierOf, SEGMENTS:SEGMENTS, safeName:safeName,
-    readBook:readBook, bestSheet:bestSheet, step1Analyze:step1Analyze, detectResultKind:detectResultKind, pickAnalysisSheet:pickAnalysisSheet,
+    readBook:readBook, readMergeFiles:readMergeFiles, bestSheet:bestSheet, step1Analyze:step1Analyze, detectResultKind:detectResultKind, pickAnalysisSheet:pickAnalysisSheet,
     step2Compare:step2Compare, s3dbBuild:s3dbBuild, step3Match:step3Match,
     s3LocGroups:s3LocGroups, s3SumList:s3SumList,
     buildFullBook:buildFullBook, buildOfflineBook:buildOfflineBook,
@@ -937,7 +998,92 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 (function () {
   'use strict';
   var P = window.Pipeline;
-  var S = { new: null, old: null, db: null };   // {name, buf:Uint8Array}
+/* ===== zip 压缩包支持（平台导出可能打包成 zip，内含 _0/_1 等多份 xlsx）=====
+   原生实现：读 zip 中央目录 → 解出 .xlsx/.xls → 交给既有「多文件拼接」逻辑；不引入第三方库 */
+function zipReadEntries(u8){
+  var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  var i = u8.length - 22, min = Math.max(0, u8.length - 22 - 65536);
+  while(i >= min){ if(dv.getUint32(i, true) === 0x06054b50) break; i--; }
+  if(i < min) throw new Error('不是有效的 zip 压缩包');
+  var count = dv.getUint16(i+10, true), cdOff = dv.getUint32(i+16, true);
+  var entries = [], p = cdOff;
+  for(var k=0;k<count;k++){
+    if(dv.getUint32(p, true) !== 0x02014b50) throw new Error('zip 中央目录损坏');
+    var flags = dv.getUint16(p+8, true), method = dv.getUint16(p+10, true);
+    var csize = dv.getUint32(p+20, true), usize = dv.getUint32(p+24, true);
+    var nlen = dv.getUint16(p+28, true), elen = dv.getUint16(p+30, true), clen = dv.getUint16(p+32, true);
+    var lho = dv.getUint32(p+42, true);
+    var raw = u8.subarray(p+46, p+46+nlen), name = '';
+    try{ name = new TextDecoder((flags & 0x800) ? 'utf-8' : 'gbk').decode(raw); }
+    catch(e){ for(var q=0;q<raw.length;q++) name += String.fromCharCode(raw[q]); }
+    entries.push({name:name, method:method, csize:csize, usize:usize, lho:lho});
+    p += 46 + nlen + elen + clen;
+  }
+  return entries;
+}
+function zipEntrySlice(u8, en){
+  var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), p = en.lho;
+  if(dv.getUint32(p, true) !== 0x04034b50) throw new Error('zip 本地头损坏：'+en.name);
+  var nlen = dv.getUint16(p+26, true), elen = dv.getUint16(p+28, true);
+  var s = p + 30 + nlen + elen;
+  return u8.subarray(s, s + en.csize);
+}
+function zipInflateRaw(comp){
+  if(typeof DecompressionStream === 'undefined' || typeof Response === 'undefined')
+    return Promise.reject(new Error('当前环境不支持 zip 解压（缺少 DecompressionStream）'));
+  try{
+    var stream = new Response(comp).body.pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).arrayBuffer().then(function(ab){ return new Uint8Array(ab); });
+  }catch(e){ return Promise.reject(e); }
+}
+function zipUnzip(file){
+  var readAb = (typeof file.arrayBuffer === 'function')
+    ? file.arrayBuffer()
+    : new Promise(function(res, rej){
+        var fr = new FileReader();
+        fr.onload = function(e){ res(e.target.result); };
+        fr.onerror = function(){ rej(new Error('读取 '+file.name+' 失败')); };
+        fr.readAsArrayBuffer(file);
+      });
+  return readAb.then(function(ab){
+    var u8 = new Uint8Array(ab);
+    if(u8.length < 4 || u8[0] !== 0x50 || u8[1] !== 0x4B) throw new Error(file.name + ' 不是有效的 zip 压缩包');
+    var entries = zipReadEntries(u8), xlsx = [], skipped = [];
+    entries.forEach(function(en){
+      if(/\/$/.test(en.name) || en.name.indexOf('__MACOSX/') === 0 || en.name.charAt(0) === '.') return;
+      if(!/\.(xlsx|xls)$/i.test(en.name)){ skipped.push(en.name); return; }
+      xlsx.push(en);
+    });
+    if(!xlsx.length) throw new Error('压缩包 '+file.name+' 里没有 .xlsx/.xls 文件' + (skipped.length ? '（已忽略：'+skipped.join('、')+'）' : ''));
+    return Promise.all(xlsx.map(function(en){
+      var data = (en.method === 0) ? Promise.resolve(zipEntrySlice(u8, en))
+        : (en.method === 8) ? zipInflateRaw(zipEntrySlice(u8, en))
+        : Promise.reject(new Error('不支持的压缩方式（method '+en.method+'）：'+en.name));
+      return data.then(function(d){
+        if(en.usize && d.length !== en.usize) throw new Error('解压大小不符：'+en.name);
+        return new File([d], en.name);
+      });
+    })).then(function(files){
+      return { zipName: file.name, files: files, skipped: skipped };
+    });
+  });
+}
+function zipExpandFiles(list){
+  var fl = Array.prototype.slice.call(list || []).filter(function(f){ return f && f.name; });
+  var zips = fl.filter(function(f){ return /\.zip$/i.test(String(f.name)); });
+  if(!zips.length) return Promise.resolve({ files: fl, notes: [] });
+  var rest = fl.filter(function(f){ return !/\.zip$/i.test(String(f.name)); });
+  return Promise.all(zips.map(zipUnzip)).then(function(rs){
+    var files = rest.slice(), notes = [];
+    rs.forEach(function(r){
+      files = files.concat(r.files);
+      notes.push(r.zipName + ' → ' + r.files.length + ' 个表格' + (r.skipped.length ? '（忽略 ' + r.skipped.length + ' 个非表格文件）' : ''));
+    });
+    return { files: files, notes: notes };
+  });
+}
+
+  var S = { new: null, old: null, db: null };   // new/old: [{name, buf, size}] 可多文件；db: 单文件
   var OUT = null;                                // 运行结果
 
   function $(id) { return document.getElementById(id); }
@@ -947,28 +1093,44 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
-  /* ---------- 文件槽 ---------- */
+  /* ---------- 文件槽（支持多选/多拖：平台导出拆成 _0/_1 多份时自动拼接） ---------- */
   function bindSlot(slotId, inputId, nmId, key) {
     var slot = $(slotId), input = $(inputId), nm = $(nmId);
     slot.addEventListener('click', function () { input.click(); });
-    input.addEventListener('change', function () { if (input.files[0]) load(input.files[0]); input.value = ''; });
+    input.addEventListener('change', function () { if (input.files.length) loadFiles(input.files); input.value = ''; });
     ['dragenter', 'dragover'].forEach(function (ev) {
       slot.addEventListener(ev, function (e) { e.preventDefault(); e.stopPropagation(); slot.classList.add('over'); });
     });
     ['dragleave', 'drop'].forEach(function (ev) {
       slot.addEventListener(ev, function (e) { e.preventDefault(); e.stopPropagation(); slot.classList.remove('over'); });
     });
-    slot.addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+    slot.addEventListener('drop', function (e) { if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files); });
 
-    function load(file) {
-      var fr = new FileReader();
-      fr.onload = function (e) {
-        S[key] = { name: file.name, buf: new Uint8Array(e.target.result) };
-        slot.classList.add('ok');
-        nm.textContent = file.name + '（' + fmtSize(file.size) + '）';
-        checkReady();
-      };
-      fr.readAsArrayBuffer(file);
+    function loadFiles(list) {
+      zipExpandFiles(list).then(function (rz) {
+        if (rz.notes.length) log('📦 已自动解压压缩包：' + rz.notes.join('；'));
+        var files = rz.files;
+        var done = 0, acc = [];
+        files.forEach(function (file) {
+          var fr = new FileReader();
+          fr.onload = function (e) {
+            acc.push({ name: file.name, buf: new Uint8Array(e.target.result), size: file.size });
+            if (++done === files.length) {
+              acc.sort(function (a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0); });
+              S[key] = acc;
+              slot.classList.add('ok');
+              nm.textContent = (acc.length === 1)
+                ? acc[0].name + '（' + fmtSize(acc[0].size) + '）'
+                : acc.length + ' 个文件已选（自动拼接）：' + acc.map(function (f) { return f.name; }).join(' + ');
+              checkReady();
+            }
+          };
+          fr.readAsArrayBuffer(file);
+        });
+      }).catch(function (err) {
+        slot.classList.remove('ok');
+        nm.textContent = '❌ ' + err.message;
+      });
     }
   }
   bindSlot('slotNew', 'fNew', 'nmNew', 'new');
@@ -976,7 +1138,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   bindSlot('slotDb', 'fDb', 'nmDb', 'db');
 
   function checkReady() {
-    $('runBtn').disabled = !(S.new && S.old);
+    $('runBtn').disabled = !(S.new && S.new.length && S.old && S.old.length);
   }
 
   /* ---------- 日志 ---------- */
@@ -991,7 +1153,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   $('runBtn').addEventListener('click', function () {
     var err = $('err');
     err.style.display = 'none';
-    if (!S.new || !S.old) { err.textContent = '请先选择「最新文件」和「旧文件」'; err.style.display = 'block'; return; }
+    if (!S.new || !S.new.length || !S.old || !S.old.length) { err.textContent = '请先选择「最新文件」和「旧文件」'; err.style.display = 'block'; return; }
     $('runBtn').disabled = true;
     $('runBtn').textContent = '⏳ 处理中…';
     $('statCard').style.display = 'none';
@@ -1001,10 +1163,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     var t0 = Date.now();
     P.run({
-      newBuf: S.new.buf, newName: S.new.name,
-      oldBuf: S.old.buf, oldName: S.old.name,
-      dbBuf: S.db ? S.db.buf : null, dbName: S.db ? S.db.name : '',
+      newFiles: S.new, oldFiles: S.old,
+      dbBuf: S.db && S.db.length ? S.db[0].buf : null, dbName: S.db && S.db.length ? S.db[0].name : '',
       carrier: $('carrier').value,
+      byDevice: $('dedupMode').value !== 'all',
       withSource: $('withSource').checked,
       log: log
     }).then(function (r) {
@@ -1026,8 +1188,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /* ---------- 结果概览 ---------- */
   function stCard(v, l, cls) { return '<div class="st ' + (cls || '') + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
   function renderStats(s) {
+    var devMode = s.dedupMode !== 'all';
+    var badge = '<span style="display:inline-block;background:' + (devMode ? '#eef4ff' : '#fff4e6') + ';color:' + (devMode ? '#2f5496' : '#b45309') + ';border:1px solid ' + (devMode ? '#cfe0ff' : '#ffd8a8') + ';border-radius:6px;padding:1px 8px;font-size:11.5px;font-weight:600;margin-right:8px;vertical-align:middle">口径：' + esc(s.modeLabel || (devMode ? '按设备(IP)去重' : '全部通道(按行)')) + '</span>';
     var h = '';
-    h += stCard(s.newTotal, '新文件 有IP设备');
+    h += stCard(s.newTotal, devMode ? '新文件 有IP设备' : '新文件 有IP通道');
     h += stCard(s.newOn, '新文件 在线', 'on');
     h += stCard(s.newOff, '新文件 离线', 'off');
     h += stCard(s.filteredNew, s.carrier + '离线（新）', 'blue');
@@ -1044,9 +1208,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     });
     $('stats').innerHTML = h;
     $('statCard').style.display = 'block';
-    $('statCard').querySelector('h2').innerHTML = '结果概览<span style="font-weight:400;font-size:11.5px;color:#9aa4b4;margin-left:8px">核对：' +
+    $('statCard').querySelector('h2').innerHTML = '结果概览' + badge + '<span style="font-weight:400;font-size:11.5px;color:#9aa4b4;margin-left:8px">核对：' +
       (s.consistent ? '✅ 原' + s.totalL + ' = 共同' + s.common + ' + 新修复' + s.fixCnt + '；新' + s.totalR + ' = 共同' + s.common + ' + 新离线' + s.offCnt
-        : '⚠️ 交叉核对不一致') + '　｜　匹配库：' + esc(s.dbInfo) + '</span>';
+        : '⚠️ 交叉核对不一致') + '　｜　匹配库：' + esc(s.dbInfo) + '</span>' +
+      '<div style="margin-top:8px;font-size:12px;color:#8a94a6">本次统计口径：<b>' + esc(s.modeLabel || '') + '</b>　｜　通道行 ' + (s.chanRows == null ? '—' : s.chanRows) + ' 行' +
+      (s.multiChan ? '　｜　多通道设备 ' + s.multiChan + ' 台（其中在线/离线混合 ' + s.mixedChan + ' 台，按在线计）' : '') + '</div>';
   }
 
   /* ---------- 文件列表 ---------- */
